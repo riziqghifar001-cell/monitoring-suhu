@@ -1,4 +1,4 @@
-﻿
+
 const $ = id => document.getElementById(id);
 
 // ==========================================
@@ -127,13 +127,10 @@ async function fetchLatest() {
 // ==========================================
 async function fetchTodayHistory() {
   const today = jakartaDateString();
-
-  // WIB = UTC+7; batas hari dibuat eksplisit.
   const start = `${today}T00:00:00+07:00`;
 
   const tomorrowDate = new Date(
-    new Date(`${today}T00:00:00+07:00`).getTime() +
-    24 * 60 * 60 * 1000
+    new Date(start).getTime() + 24 * 60 * 60 * 1000
   );
 
   const tomorrow = jakartaDateString(tomorrowDate);
@@ -141,14 +138,10 @@ async function fetchTodayHistory() {
 
   const query = new URLSearchParams({
     select: "suhu,kelembapan,recorded_at",
-    recorded_at: `gte.${start}`,
+    and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
     order: "recorded_at.asc",
     limit: String(PAGE_SIZE)
   });
-
-  // Filter akhir hari ditambahkan terpisah agar tidak
-  // menimpa filter awal recorded_at.
-  query.append("recorded_at", `lt.${end}`);
 
   const all = [];
   let offset = 0;
@@ -162,7 +155,6 @@ async function fetchTodayHistory() {
     all.push(...rows.map(normalizeRecord).filter(Boolean));
 
     if (rows.length < PAGE_SIZE) break;
-
     offset += rows.length;
   }
 
