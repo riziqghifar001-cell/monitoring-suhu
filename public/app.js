@@ -135,19 +135,29 @@ async function fetchTodayHistory() {
 
   const tomorrow = jakartaDateString(tomorrowDate);
   const end = `${tomorrow}T00:00:00+07:00`;
+  const allRows = [];
+  let offset = 0;
 
-  const query = new URLSearchParams({
-    select: "suhu,kelembapan,recorded_at",
-    and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
-    order: "recorded_at.asc",
-    limit: "1000"
-  });
+  while (true) {
+    const query = new URLSearchParams({
+      select: "suhu,kelembapan,recorded_at",
+      and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
+      order: "recorded_at.asc",
+      limit: String(PAGE_SIZE),
+      offset: String(offset)
+    });
 
-  const rows = await supabaseFetch(
-    `${TABLE_URL}?${query.toString()}`
-  );
+    const rows = await supabaseFetch(
+      `${TABLE_URL}?${query.toString()}`
+    );
 
-  return rows.map(normalizeRecord).filter(Boolean);
+    allRows.push(...rows);
+
+    if (rows.length < PAGE_SIZE) break;
+    offset += rows.length;
+  }
+
+  return allRows.map(normalizeRecord).filter(Boolean);
 }
 
 // ==========================================
@@ -192,16 +202,12 @@ function describeTemperature(temp) {
 // ==========================================
 function analyzeByHour(records) {
   const today = jakartaDateString();
-
-  const todayRecords = records.filter(record =>
-    jakartaDateString(record.date) === today
-  );
-
   const groups = new Map();
 
-  for (const record of todayRecords) {
-    const hour = jakartaHour(record.date);
+  for (const record of records) {
+    if (jakartaDateString(record.date) !== today) continue;
 
+    const hour = jakartaHour(record.date);
     if (!groups.has(hour)) groups.set(hour, []);
     groups.get(hour).push(record);
   }
@@ -211,66 +217,59 @@ function analyzeByHour(records) {
   for (const [hour, values] of groups.entries()) {
     if (values.length < 3) continue;
 
-    const average = values.reduce(
-      (sum, item) => sum + item.suhu, 0
-    ) / values.length;
-
-    const min = Math.min(...values.map(item => item.suhu));
-    const max = Math.max(...values.map(item => item.suhu));
-
-    hourly.push({ hour, average, min, max, count: values.length });
+    const temps = values.map(item => item.suhu);
+    hourly.push({
+      hour,
+      average: temps.reduce((sum, value) => sum + value, 0) / temps.length,
+      min: Math.min(...temps),
+      max: Math.max(...temps),
+      count: temps.length
+    });
   }
 
-  if (!hourly.length) {
-    $("hotHour").textContent = "Belum cukup data";
-    $("coolHour").textContent = "Belum cukup data";
+  const hotHour = $("hotHour");
+  const coolHour = $("coolHour");
+  const hotDetail = $("hotDetail");
+  const coolDetail = $("coolDetail");
+  const insight = $("insightText");
 
-    $("hotDetail").textContent =
-      "Diperlukan minimal 3 pengukuran dalam satu jam.";
+  const range = hour =>
+    `${String(hour).padStart(2, "0")}.00–${String((hour + 1) % 24).padStart(2, "0")}.00`;
 
-    $("coolDetail").textContent =
-      "Hasil tersedia setelah data mencukupi.";
+  function showResult(element, detail, item) {
+    element.textContent = range(item.hour);
+    detail.textContent =
+      `Rata-rata ${item.average.toFixed(1)} °C; rentang ` +
+      `${item.min.toFixed(1)}–${item.max.toFixed(1)} °C; ` +
+      `${item.count} pengukuran.`;
+  }
 
-    $("insightText").textContent =
-      "Pantau kamar lebih lama untuk menemukan pola suhu harian.";
-
+  if (hourly.length < 2) {
+    hotHour.textContent = "Belum cukup data";
+    coolHour.textContent = "Belum cukup data";
+    hotDetail.textContent = "Diperlukan minimal 3 pengukuran per jam.";
+    coolDetail.textContent = "Diperlukan data dari jam lain untuk perbandingan.";
+    insight.textContent = hourly.length === 0
+      ? "Belum ada jam dengan data yang mencukupi."
+      : "Baru satu jam memenuhi syarat. Tunggu data dari jam lain.";
     return;
   }
 
-  const hottest = hourly.reduce(
-    (a, b) => b.average > a.average ? b : a
-  );
+  const highest = Math.max(...hourly.map(item => item.average));
+  const lowest = Math.min(...hourly.map(item => item.average));
+  const hottest = hourly.filter(item => Math.abs(item.average - highest) < 1e-9);
+  const coolest = hourly.filter(item => Math.abs(item.average - lowest) < 1e-9);
 
-  const coolest = hourly.reduce(
-    (a, b) => b.average < a.average ? b : a
-  );
+  showResult(hotHour, hotDetail, hottest[0]);
+  showResult(coolHour, coolDetail, coolest[0]);
 
-  const hourRange = hour =>
-    `${String(hour).padStart(2, "0")}.00–` +
-    `${String((hour + 1) % 24).padStart(2, "0")}.00`;
-
-  $("hotHour").textContent = hourRange(hottest.hour);
-
-  $("hotDetail").textContent =
-    `Rata-rata ${hottest.average.toFixed(1)} °C; ` +
-    `rentang ${hottest.min.toFixed(1)}–${hottest.max.toFixed(1)} °C; ` +
-    `${hottest.count} pengukuran.`;
-
-  $("coolHour").textContent = hourRange(coolest.hour);
-
-  $("coolDetail").textContent =
-    `Rata-rata ${coolest.average.toFixed(1)} °C; ` +
-    `rentang ${coolest.min.toFixed(1)}–${coolest.max.toFixed(1)} °C; ` +
-    `${coolest.count} pengukuran.`;
-
-  if (hottest.hour === coolest.hour) {
-    $("insightText").textContent =
-      "Belum terlihat perbedaan jam panas dan sejuk yang jelas.";
+  if (Math.abs(highest - lowest) < 1e-9) {
+    insight.textContent = "Rata-rata suhu semua jam yang memenuhi syarat sama.";
   } else {
-    $("insightText").textContent =
-      `Selisih rata-rata suhu kedua jam tersebut ` +
-      `${(hottest.average - coolest.average).toFixed(1)} °C. ` +
-      `Hasil dihitung dari data hari ini.`;
+    insight.textContent =
+      `Selisih rata-rata suhu jam terpanas dan tersejuk ` +
+      `${(highest - lowest).toFixed(1)} °C. ` +
+      "Perbandingan berdasarkan jam dengan minimal 3 pengukuran.";
   }
 }
 
