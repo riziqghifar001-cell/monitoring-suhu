@@ -1,0 +1,104 @@
+﻿<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f4">
+  <title>Monitoring Suhu Kamar</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <div>
+        <p class="eyebrow">MONITORING RUANGAN</p>
+        <h1>Kondisi Kamar</h1>
+        <p class="subtitle">Pemantauan suhu dan kelembapan secara langsung.</p>
+      </div>
+      <div class="status">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Menghubungkan sensor...</span>
+      </div>
+    </header>
+
+    <section class="room-info">
+      <div>
+        <span class="room-label">Luas ruangan</span>
+        <strong>18 m²</strong>
+      </div>
+      <span class="room-size">6 m × 3 m</span>
+    </section>
+
+    <section class="readings">
+      <article class="reading-card">
+        <div class="card-heading">
+          <span>Suhu ruangan</span>
+          <span class="symbol">°C</span>
+        </div>
+        <div class="value-line">
+          <strong id="temperature">--.-</strong>
+          <span>°C</span>
+        </div>
+        <p id="temperatureStatus" class="reading-note">Menunggu data sensor</p>
+      </article>
+
+      <article class="reading-card">
+        <div class="card-heading">
+          <span>Kelembapan udara</span>
+          <span class="symbol">RH</span>
+        </div>
+        <div class="value-line">
+          <strong id="humidity">--</strong>
+          <span>%</span>
+        </div>
+        <p class="reading-note">Kelembapan relatif udara</p>
+      </article>
+    </section>
+
+    <section class="analysis">
+      <div class="analysis-heading">
+        <div>
+          <p class="eyebrow">ANALISIS HARIAN</p>
+          <h2>Kapan kamar terasa panas?</h2>
+        </div>
+        <span class="date-label" id="analysisDate">Hari ini</span>
+      </div>
+
+      <div class="analysis-item hot">
+        <div class="analysis-icon">↑</div>
+        <div class="analysis-content">
+          <span class="analysis-label">Jam paling panas</span>
+          <strong id="hotHour">Belum cukup data</strong>
+          <p id="hotDetail">Data suhu per jam akan dianalisis di sini.</p>
+        </div>
+      </div>
+
+      <div class="analysis-item cool">
+        <div class="analysis-icon">↓</div>
+        <div class="analysis-content">
+          <span class="analysis-label">Jam paling sejuk</span>
+          <strong id="coolHour">Belum cukup data</strong>
+          <p id="coolDetail">Data suhu per jam akan dianalisis di sini.</p>
+        </div>
+      </div>
+
+      <div class="insight">
+        <strong>Kesimpulan pengukuran</strong>
+        <p id="insightText">Menunggu data sensor untuk mengetahui pola suhu kamar.</p>
+      </div>
+
+      <p class="method">
+        Analisis memakai rata-rata suhu setiap jam. Jam baru ditampilkan
+        setelah minimal 3 pengukuran valid pada jam tersebut.
+        Hasil berdasarkan data yang masih tersedia di server.
+      </p>
+    </section>
+
+    <footer>
+      <span>Sensor ESP32-S3 + DHT22</span>
+      <span id="lastUpdate">Belum menerima data</span>
+    </footer>
+  </main>
+</body>
+</html>
