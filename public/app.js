@@ -1,4 +1,4 @@
-
+﻿
 const $ = id => document.getElementById(id);
 
 // ==========================================
@@ -13,8 +13,8 @@ const SUPABASE_KEY =
 const TABLE_URL =
   `${SUPABASE_URL}/rest/v1/sensor_readings`;
 
-const OFFLINE_AFTER_MS = 15000;
-const REFRESH_LATEST_MS = 2500;
+const OFFLINE_AFTER_MS = 75000;
+const REFRESH_LATEST_MS = 5000;
 const REFRESH_HISTORY_MS = 60000;
 const PAGE_SIZE = 1000;
 
@@ -378,3 +378,5 @@ if (
     }
   }, 5000);
 }
+
+
