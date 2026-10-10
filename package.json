@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "monitoring-dht22",
   "version": "1.0.0",
   "description": "Dashboard monitoring ESP32-S3 dan DHT22",
