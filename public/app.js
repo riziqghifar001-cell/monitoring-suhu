@@ -140,25 +140,14 @@ async function fetchTodayHistory() {
     select: "suhu,kelembapan,recorded_at",
     and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
     order: "recorded_at.asc",
-    limit: String(PAGE_SIZE)
+    limit: "1000"
   });
 
-  const all = [];
-  let offset = 0;
+  const rows = await supabaseFetch(
+    `${TABLE_URL}?${query.toString()}`
+  );
 
-  while (true) {
-    const rows = await supabaseFetch(
-      `${TABLE_URL}?${query.toString()}`,
-      `${offset}-${offset + PAGE_SIZE - 1}`
-    );
-
-    all.push(...rows.map(normalizeRecord).filter(Boolean));
-
-    if (rows.length < PAGE_SIZE) break;
-    offset += rows.length;
-  }
-
-  return all;
+  return rows.map(normalizeRecord).filter(Boolean);
 }
 
 // ==========================================
