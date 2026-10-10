@@ -1,4 +1,4 @@
-﻿
+
 const $ = id => document.getElementById(id);
 
 // ==========================================
@@ -199,12 +199,21 @@ function describeTemperature(temp) {
 
 // ==========================================
 // 8. ANALISIS SUHU PER JAM
-// ==========================================
 function analyzeByHour(records) {
   const today = jakartaDateString();
+  const now = new Date();
+  const currentHour = jakartaHour(now);
+  const elapsedSeconds = now.getMinutes() * 60 + now.getSeconds();
+
+  // ESP32 direncanakan mengirim data setiap 30 detik.
+  const TARGET_PER_HOUR = 120;
+  const MIN_SAMPLES = 60;
+  const MIN_COVERAGE = 0.75;
+
   const groups = new Map();
 
   for (const record of records) {
+    if (!record || !record.date || !Number.isFinite(record.suhu)) continue;
     if (jakartaDateString(record.date) !== today) continue;
 
     const hour = jakartaHour(record.date);
@@ -215,23 +224,41 @@ function analyzeByHour(records) {
   const hourly = [];
 
   for (const [hour, values] of groups.entries()) {
-    if (values.length < 3) continue;
+    // Jam lampau memakai target satu jam penuh.
+    // Jam berjalan memakai target sesuai durasi yang telah berlalu.
+    const expected = hour === currentHour
+      ? Math.min(TARGET_PER_HOUR, Math.ceil(elapsedSeconds / 30))
+      : TARGET_PER_HOUR;
 
     const temps = values.map(item => item.suhu);
+    const count = temps.length;
+    const coverage = expected > 0 ? Math.min(1, count / expected) : 0;
+
+    if (count < MIN_SAMPLES || coverage < MIN_COVERAGE) continue;
+
     hourly.push({
       hour,
-      average: temps.reduce((sum, value) => sum + value, 0) / temps.length,
+      average: temps.reduce((sum, value) => sum + value, 0) / count,
       min: Math.min(...temps),
       max: Math.max(...temps),
-      count: temps.length
+      count,
+      expected,
+      coverage
     });
   }
+
+  hourly.sort((a, b) => a.hour - b.hour);
 
   const hotHour = $("hotHour");
   const coolHour = $("coolHour");
   const hotDetail = $("hotDetail");
   const coolDetail = $("coolDetail");
   const insight = $("insightText");
+
+  if (!hotHour || !coolHour || !hotDetail || !coolDetail || !insight) {
+    console.error("Elemen analisis suhu tidak ditemukan di HTML.");
+    return;
+  }
 
   const range = hour =>
     `${String(hour).padStart(2, "0")}.00–${String((hour + 1) % 24).padStart(2, "0")}.00`;
@@ -241,17 +268,20 @@ function analyzeByHour(records) {
     detail.textContent =
       `Rata-rata ${item.average.toFixed(1)} °C; rentang ` +
       `${item.min.toFixed(1)}–${item.max.toFixed(1)} °C; ` +
-      `${item.count} pengukuran.`;
+      `${item.count}/${item.expected} sampel (${(item.coverage * 100).toFixed(0)}%); ` +
+      `${item.count} pengukuran valid.`;
   }
 
   if (hourly.length < 2) {
     hotHour.textContent = "Belum cukup data";
     coolHour.textContent = "Belum cukup data";
-    hotDetail.textContent = "Diperlukan minimal 3 pengukuran per jam.";
-    coolDetail.textContent = "Diperlukan data dari jam lain untuk perbandingan.";
-    insight.textContent = hourly.length === 0
-      ? "Belum ada jam dengan data yang mencukupi."
-      : "Baru satu jam memenuhi syarat. Tunggu data dari jam lain.";
+    hotDetail.textContent =
+      "Setiap jam harus memiliki minimal 60 sampel valid dan kelengkapan 75%.";
+    coolDetail.textContent =
+      "Diperlukan setidaknya dua jam yang memenuhi kriteria tersebut.";
+    insight.textContent =
+      `Baru ${hourly.length} jam memenuhi syarat. ` +
+      "Analisis akan diperbarui ketika data mencukupi.";
     return;
   }
 
@@ -264,17 +294,17 @@ function analyzeByHour(records) {
   showResult(coolHour, coolDetail, coolest[0]);
 
   if (Math.abs(highest - lowest) < 1e-9) {
-    insight.textContent = "Rata-rata suhu semua jam yang memenuhi syarat sama.";
+    insight.textContent =
+      "Rata-rata suhu semua jam yang memenuhi syarat sama.";
   } else {
     insight.textContent =
-      `Selisih rata-rata suhu jam terpanas dan tersejuk ` +
-      `${(highest - lowest).toFixed(1)} °C. ` +
-      "Perbandingan berdasarkan jam dengan minimal 3 pengukuran.";
+      `Selisih rata-rata jam terpanas dan tersejuk ${(highest - lowest).toFixed(1)} °C. ` +
+      `${hourly.length} jam memenuhi kriteria minimal 60 sampel dan kelengkapan 75%.`;
   }
 }
 
 // ==========================================
-// 9. TAMPILKAN DATA TERBARU
+// // 9. TAMPILKAN DATA TERBARU
 // ==========================================
 function showOnline(latest) {
   setStatus(true, "ESP32 Terhubung");
@@ -378,5 +408,3 @@ if (
     }
   }, 5000);
 }
-
-
