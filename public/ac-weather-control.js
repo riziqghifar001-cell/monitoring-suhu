@@ -2,7 +2,7 @@
   "use strict";
   const $ = id => document.getElementById(id);
   const state = {
-    power: false, mode: "cool", temp: 24, fan: "auto",
+    power: false, mode: "cool", temp: 24, acTempCommand: null, fan: "auto",
     swing: true, control: "manual"
   };
 
@@ -42,6 +42,11 @@
           <button id="ac-plus" class="round-button" aria-label="Tambah suhu" type="button">+</button>
         </div>
 
+        <div class="ac-command-temperature" style="display:flex;flex-direction:column;gap:5px;margin:0 16px 16px;padding:12px 14px;border:1px solid var(--border-color,#dedede);border-radius:12px">
+          <span class="muted-label">Suhu perintah AC</span>
+          <strong id="ac-temp-command" style="font-size:24px;font-weight:600">Belum tersedia</strong>
+          <small id="ac-temp-command-note" style="font-size:12px;opacity:.75">Menunggu laporan terbaru dari ESP32</small>
+        </div>
         <div class="ac-control-label">Mode operasi</div>
         <div class="ac-button-grid" id="ac-modes">
           <button class="choice-button selected" data-mode="cool" type="button"><span>❄</span> Cool</button>
@@ -177,7 +182,16 @@
         }
 
         if (typeof a.power === "boolean") state.power = a.power;
-        if (Number.isFinite(Number(a.temp))) state.temp = Number(a.temp);
+        if (Number.isFinite(Number(a.temp)) && a.temp !== null && a.temp !== undefined)
+        state.temp = Number(a.temp);
+
+      if (a.ac_temp_command !== null && a.ac_temp_command !== undefined &&
+          Number.isInteger(Number(a.ac_temp_command)) &&
+          Number(a.ac_temp_command) >= 16 && Number(a.ac_temp_command) <= 30) {
+        state.acTempCommand = Number(a.ac_temp_command);
+      } else {
+        state.acTempCommand = null;
+      }
         if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) state.mode = a.ac_mode;
         if (["auto", "low", "med", "high"].includes(a.fan)) state.fan = a.fan;
         if (typeof a.swing === "boolean") state.swing = a.swing;
@@ -192,6 +206,23 @@
     }
     function render() {
       $("ac-temp").textContent = state.temp;
+
+    const commandEl = $("ac-temp-command");
+    const commandNoteEl = $("ac-temp-command-note");
+    if (commandEl && commandNoteEl) {
+      if (state.acTempCommand === null) {
+        commandEl.textContent = "Belum tersedia";
+        commandNoteEl.textContent = "Menunggu laporan terbaru dari ESP32";
+      } else {
+        commandEl.textContent = state.acTempCommand + " °C";
+        commandNoteEl.textContent =
+          state.acTempCommand < state.temp
+            ? "Pendinginan dipercepat oleh kontrol adaptif"
+            : state.acTempCommand > state.temp
+              ? "Suhu perintah berbeda dari target pengguna"
+              : "Suhu perintah sama dengan target pengguna";
+      }
+    }
       $("ac-power-label").textContent = state.power ? "Menyala" : "Mati";
       $("ac-power-text").textContent = state.power ? "Matikan" : "Nyalakan";
       $("ac-power").setAttribute("aria-pressed", String(state.power));
