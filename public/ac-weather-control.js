@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   "use strict";
   const $ = id => document.getElementById(id);
   const state = {
@@ -124,6 +124,51 @@
       $("ac-feedback").textContent = message;
     }
 
+    async function sendACCommand() {
+      const pin = window.prompt("Masukkan PIN kontrol AC (minimal 12 karakter):");
+      if (!pin || pin.length < 12) {
+        feedback("Perintah dibatalkan: PIN tidak valid.");
+        return false;
+      }
+
+      const mode = state.control === "manual" ? "manual" : "auto";
+      const acMode = ["cool", "dry", "fan", "heat"].includes(state.mode)
+        ? state.mode : "cool";
+      const fan = ["auto", "low", "med", "high"].includes(state.fan)
+        ? state.fan : "auto";
+
+      const payload = {
+        power: Boolean(state.power),
+        mode,
+        temp: Math.max(16, Math.min(30, Number(state.temp) || 27)),
+        ac_mode: acMode,
+        fan,
+        swing: Boolean(state.swing),
+        quiet: false,
+        turbo: false,
+        sleep: false,
+        econo: false
+      };
+
+      try {
+        const response = await fetch("/api/ac-command", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-control-pin": pin
+          },
+          body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Permintaan gagal");
+        feedback("Perintah tersimpan di Supabase. ID: " + result.command_id +
+          ". Belum memastikan AC menerima sinyal IR.");
+        return true;
+      } catch (error) {
+        feedback("Gagal mengirim perintah: " + error.message);
+        return false;
+      }
+    }
     function render() {
       $("ac-temp").textContent = state.temp;
       $("ac-power-label").textContent = state.power ? "Menyala" : "Mati";
@@ -144,44 +189,36 @@
       $("ac-auto").setAttribute("aria-checked", String(state.control === "auto_adaptive"));
     }
 
-    $("ac-power").addEventListener("click", () => {
-      state.power = !state.power;
-      render();
-      feedback("Pilihan daya berubah di tampilan. Belum dikirim ke AC: integrasi ESP32/IR belum tersedia.");
+    $("ac-power").addEventListener("click", async () => {
+      state.power = !state.power; render(); await sendACCommand();
     });
-    $("ac-minus").addEventListener("click", () => {
-      state.temp = Math.max(18, state.temp - 1);
-      render();
-      feedback("Target suhu dipilih: " + state.temp + " °C. Perintah fisik belum dikirim.");
+    $("ac-minus").addEventListener("click", async () => {
+      state.temp = Math.max(18, state.temp - 1); render(); await sendACCommand();
     });
-    $("ac-plus").addEventListener("click", () => {
-      state.temp = Math.min(30, state.temp + 1);
-      render();
-      feedback("Target suhu dipilih: " + state.temp + " °C. Perintah fisik belum dikirim.");
+    $("ac-plus").addEventListener("click", async () => {
+      state.temp = Math.min(30, state.temp + 1); render(); await sendACCommand();
     });
     document.querySelectorAll("[data-mode]").forEach(b =>
       b.addEventListener("click", () => {
         state.mode = b.dataset.mode;
         render();
-        feedback("Mode " + b.textContent.trim() + " dipilih. Perintah fisik belum dikirim.");
+        sendACCommand();
       }));
     document.querySelectorAll("[data-fan]").forEach(b =>
       b.addEventListener("click", () => {
         state.fan = b.dataset.fan;
         render();
-        feedback("Kipas " + state.fan + " dipilih. Perintah fisik belum dikirim.");
+        sendACCommand();
       }));
     $("ac-swing").addEventListener("click", () => {
       state.swing = !state.swing;
       render();
-      feedback("Swing " + (state.swing ? "aktif" : "mati") + " pada tampilan. Belum dikirim ke AC.");
+      sendACCommand();
     });
     $("ac-auto").addEventListener("click", () => {
       state.control = state.control === "manual" ? "auto_adaptive" : "manual";
       render();
-      feedback(state.control === "auto_adaptive"
-        ? "Auto Adaptive dipilih. Otomatisasi fisik belum aktif sebelum backend dan firmware terhubung."
-        : "Mode Manual dipilih. Perubahan ini belum dikirim ke AC.");
+      sendACCommand();
     });
 
     function compare() {
