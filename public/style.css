@@ -242,3 +242,111 @@ footer {
   .analysis-heading { align-items: flex-start; }
   footer { flex-direction: column; gap: 4px; }
 }
+
+/* ===== Smart AC dashboard refresh ===== */
+#smart-ac { margin-top: 28px; }
+.smart-dashboard { color: var(--text); }
+.smart-head, .weather-heading, .comparison-title {
+  display:flex; align-items:center; justify-content:space-between; gap:14px;
+  margin:0 0 15px;
+}
+.smart-head h2, .weather-heading h2 { font-size:24px; letter-spacing:-.6px; }
+.smart-sub { margin:5px 0 0; color:var(--muted); font-size:12px; }
+.ac-badge, .compare-badge {
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius:999px; padding:6px 12px; background:#f0f1f4;
+  color:#606675; font-size:11px; font-weight:750;
+}
+.ac-badge.is-on { background:#e0f5e9; color:#18794e; }
+.ac-main-card, .ac-automation, .weather-card, .comparison-card {
+  background:var(--surface); border:1px solid var(--line); border-radius:20px;
+  box-shadow:0 8px 30px rgba(25,35,50,.035);
+}
+.ac-main-card { padding:22px; }
+.ac-power-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.muted-label { display:block; color:var(--muted); font-size:12px; }
+.ac-power-label { font-size:19px; font-weight:750; margin-top:2px; }
+.power-button {
+  display:flex; align-items:center; gap:8px; border:0; border-radius:999px;
+  background:#202d40; color:white; padding:11px 16px; font:inherit;
+  font-size:12px; font-weight:700; cursor:pointer; transition:.18s;
+}
+.power-button.is-on { background:#167d56; }
+.power-symbol { font-size:20px; line-height:1; }
+.ac-temp-control {
+  display:flex; justify-content:center; align-items:center; gap:28px;
+  padding:27px 0 24px;
+}
+.round-button {
+  width:48px; height:48px; border:1px solid var(--line); border-radius:50%;
+  background:#f7f8fa; color:var(--text); font-size:26px; cursor:pointer;
+}
+.round-button:hover, .choice-button:hover, .mini-choice:hover { border-color:#8ea5cf; }
+.setpoint { text-align:center; min-width:115px; }
+.setpoint div { display:flex; align-items:flex-start; justify-content:center; gap:3px; }
+.setpoint strong { font-size:62px; line-height:1; letter-spacing:-3px; font-weight:650; }
+.setpoint div span { font-size:19px; color:var(--muted); }
+.setpoint small { color:var(--muted); font-size:12px; }
+.ac-control-label { color:var(--muted); font-size:12px; font-weight:650; margin-bottom:9px; }
+.ac-button-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
+.choice-button {
+  min-height:72px; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:6px; border:1px solid var(--line); border-radius:13px;
+  background:white; color:var(--text); font:inherit; font-size:12px; cursor:pointer;
+}
+.choice-button span { font-size:21px; }
+.choice-button.selected, .mini-choice.selected {
+  border-color:#93b8ef; background:#edf4ff; color:#245cb5;
+}
+.ac-options { display:grid; grid-template-columns:1fr; gap:16px; margin-top:20px; }
+.fan-options { display:flex; flex-wrap:wrap; gap:7px; }
+.mini-choice { border:1px solid var(--line); background:white; color:var(--text);
+  border-radius:999px; padding:8px 12px; font:inherit; font-size:11px; cursor:pointer; }
+.swing-button { display:flex; justify-content:center; align-items:center; gap:8px;
+  border:1px solid var(--line); background:white; border-radius:12px; padding:11px;
+  font:inherit; font-size:12px; cursor:pointer; }
+.swing-button.selected { background:#edf4ff; color:#245cb5; border-color:#c8daf8; }
+.ac-automation { display:flex; align-items:center; justify-content:space-between; gap:15px;
+  padding:19px 21px; margin-top:12px; }
+.ac-automation h3, .comparison-title h3 { margin:0; font-size:17px; }
+.toggle-button { flex:0 0 52px; width:52px; height:30px; padding:3px;
+  border:0; border-radius:99px; background:#d9dde5; cursor:pointer; transition:.2s; }
+.toggle-button span { display:block; width:24px; height:24px; background:white;
+  border-radius:50%; box-shadow:0 1px 4px #0002; transition:.2s; }
+.toggle-button.active { background:#2778db; }
+.toggle-button.active span { transform:translateX(22px); }
+.ac-feedback { margin:10px 2px 25px; color:var(--muted); font-size:11px; line-height:1.6; }
+.weather-heading { margin-top:26px; }
+.weather-indicator { color:#218557; font-size:11px; font-weight:700; white-space:nowrap; }
+.weather-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.weather-card { position:relative; padding:19px; overflow:hidden; }
+.weather-card.outdoor { background:linear-gradient(140deg,#fff8e9,#fff); }
+.weather-icon { display:block; font-size:23px; margin-bottom:12px; }
+.weather-value { display:flex; align-items:baseline; gap:5px; margin-top:8px; }
+.weather-value strong { font-size:clamp(30px,6vw,40px); letter-spacing:-1.5px; }
+.weather-value span { color:var(--muted); }
+.weather-card p { margin:5px 0 0; color:var(--muted); font-size:11px; }
+.comparison-card { padding:20px; margin-top:12px; }
+.compare-values { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:17px 0; }
+.compare-values > div { background:#f7f8fa; border-radius:12px; padding:13px; min-width:0; }
+.compare-values span { display:block; color:var(--muted); font-size:11px; }
+.compare-values strong { display:block; margin-top:5px; font-size:24px; letter-spacing:-.5px; }
+.delta-line { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  border-top:1px solid var(--line); padding-top:14px; font-size:12px; }
+.delta-line strong { font-size:17px; }
+.weather-time { margin:14px 0 0; color:var(--muted); font-size:10px; }
+@media(max-width:560px) {
+  #smart-ac { margin-top:22px; }
+  .ac-main-card { padding:17px; border-radius:17px; }
+  .ac-temp-control { gap:16px; }
+  .round-button { width:43px; height:43px; }
+  .setpoint strong { font-size:55px; }
+  .ac-button-grid { gap:6px; }
+  .choice-button { min-height:66px; font-size:11px; }
+  .weather-grid { gap:8px; }
+  .weather-card { padding:14px; }
+  .comparison-card { padding:15px; }
+  .compare-values { gap:8px; }
+  .compare-values > div { padding:10px; }
+  .compare-values strong { font-size:21px; }
+}
