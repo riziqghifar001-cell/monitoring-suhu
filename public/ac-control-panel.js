@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   if (document.getElementById("ac-control-card")) return;
 
   const card = document.createElement("section");
@@ -7,8 +7,7 @@
 
   card.innerHTML = `
     <h2>Kontrol AC Daikin</h2>
-    <p>Masukkan PIN untuk mengirim perintah ke ESP32-S3.</p>
-    <label>PIN kontrol<br><input id="ac-pin" type="password" autocomplete="off" style="width:100%;padding:10px"></label>
+    <p>Perintah dikirim melalui server ke Supabase.</p>
     <p><label>Power <select id="ac-power"><option value="true">ON</option><option value="false">OFF</option></select></label></p>
     <p><label>Mode kontrol <select id="ac-mode"><option value="manual">Manual</option><option value="auto">Otomatis</option></select></label></p>
     <p><label>Suhu <select id="ac-temp">${Array.from({length:15},(_,i)=>`<option value="${i+16}" ${i+16===27?"selected":""}>${i+16} °C</option>`).join("")}</select></label></p>
@@ -28,13 +27,7 @@
   const $ = id => document.getElementById(id);
 
   $("ac-send").addEventListener("click", async () => {
-    const pin = $("ac-pin").value;
-    if (pin.length < 12) {
-      $("ac-status").textContent = "PIN minimal 12 karakter.";
-      return;
-    }
-
-    const payload = {
+const payload = {
       power: $("ac-power").value === "true",
       mode: $("ac-mode").value,
       temp: Number($("ac-temp").value),
@@ -56,8 +49,7 @@
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-control-pin": pin
-        },
+},
         body: JSON.stringify(payload)
       });
 

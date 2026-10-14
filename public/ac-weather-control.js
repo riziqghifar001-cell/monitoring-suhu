@@ -125,11 +125,6 @@
     }
 
     async function sendACCommand() {
-      const pin = window.prompt("Masukkan PIN kontrol AC (minimal 12 karakter):");
-      if (!pin || pin.length < 12) {
-        feedback("Perintah dibatalkan: PIN tidak valid.");
-        return false;
-      }
 
       const mode = state.control === "manual" ? "manual" : "auto";
       const acMode = ["cool", "dry", "fan", "heat"].includes(state.mode)
@@ -155,7 +150,7 @@
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-control-pin": pin
+
           },
           body: JSON.stringify(payload)
         });
@@ -167,6 +162,32 @@
       } catch (error) {
         feedback("Gagal mengirim perintah: " + error.message);
         return false;
+      }
+    }
+    async function loadACState() {
+      try {
+        const response = await fetch("/api/ac-state", { cache: "no-store" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const result = await response.json();
+        const a = result && result.state;
+        const deviceOnline = Boolean(result && result.device && result.device.online);
+        if (!a) {
+          feedback("Status AC belum tersedia; ESP32 belum dapat dipastikan online.");
+          return;
+        }
+
+        if (typeof a.power === "boolean") state.power = a.power;
+        if (Number.isFinite(Number(a.temp))) state.temp = Number(a.temp);
+        if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) state.mode = a.ac_mode;
+        if (["auto", "low", "med", "high"].includes(a.fan)) state.fan = a.fan;
+        if (typeof a.swing === "boolean") state.swing = a.swing;
+        if (a.mode === "manual") state.control = "manual";
+        else if (a.mode === "auto" || a.mode === "auto_adaptive") state.control = "auto_adaptive";
+
+        render();
+        feedback(deviceOnline ? "ESP32 ONLINE — status dibaca dari Supabase." : "ESP32 OFFLINE — data terakhir mungkin sudah lama. Periksa perangkat dan koneksi.");
+      } catch (error) {
+        feedback("Status AC gagal dibaca: " + error.message);
       }
     }
     function render() {
@@ -286,6 +307,8 @@
     if (roomTemp) roomObserver.observe(roomTemp, { childList: true, characterData: true, subtree: true });
 
     render();
+    loadACState();
+    setInterval(loadACState, 5000);
     loadWeather();
     setInterval(loadWeather, 60 * 1000);
     setInterval(compare, 5000);

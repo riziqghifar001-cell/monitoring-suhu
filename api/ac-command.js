@@ -1,4 +1,4 @@
-﻿module.exports = async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "POST") {
@@ -6,17 +6,11 @@
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const expectedPin = process.env.AC_CONTROL_PIN;
   const supabaseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!expectedPin || !supabaseUrl || !serviceKey) {
+  if (!supabaseUrl || !serviceKey) {
     return res.status(500).json({ error: "Konfigurasi server belum lengkap" });
-  }
-
-  const pin = req.headers["x-control-pin"];
-  if (typeof pin !== "string" || pin.length < 12 || pin !== expectedPin) {
-    return res.status(401).json({ error: "PIN kontrol salah" });
   }
 
   try {
