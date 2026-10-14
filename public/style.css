@@ -1,10 +1,10 @@
-﻿:root {
-  --bg: #f6f7f4;
+:root {
+  --bg: #f4f6f3;
   --surface: #ffffff;
   --text: #252a25;
   --muted: #7c837a;
   --line: #e7eae4;
-  --green: #52745b;
+  --green: #416b4b;
   --green-bg: #eef4ed;
   --orange: #a85d3d;
   --orange-bg: #fbf0e9;
@@ -349,4 +349,161 @@ footer {
   .compare-values { gap:8px; }
   .compare-values > div { padding:10px; }
   .compare-values strong { font-size:21px; }
+}
+
+
+/* UI POLISH - visual only */
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.container {
+  width: min(820px, calc(100% - 32px));
+}
+
+.room-info,
+.reading-card,
+.analysis {
+  box-shadow: 0 3px 14px rgba(30, 45, 30, .035);
+}
+
+.room-info,
+.reading-card,
+.analysis {
+  border-radius: 15px;
+}
+
+.reading-card {
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.reading-card:hover {
+  border-color: #d3dfd1;
+  box-shadow: 0 6px 20px rgba(30, 45, 30, .05);
+}
+
+.value-line strong,
+.analysis-content strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-item {
+  padding: 17px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.analysis-item.hot {
+  border-color: #f5e3d8;
+}
+
+.analysis-item.cool {
+  border-color: #dfece0;
+}
+
+.date-label {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafbf9;
+}
+
+button:focus-visible {
+  outline: 2px solid #6d9674;
+  outline-offset: 3px;
+}
+
+@media (max-width: 560px) {
+  .container {
+    width: calc(100% - 24px);
+    margin-top: 22px;
+  }
+
+  .room-info {
+    gap: 8px;
+    padding: 13px 14px;
+  }
+
+  .room-info > div {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+  }
+
+  .room-size {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .readings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .reading-card {
+    min-width: 0;
+    min-height: 154px;
+    padding: 14px 12px;
+  }
+
+  .card-heading {
+    gap: 5px;
+    font-size: 11px;
+  }
+
+  .value-line {
+    gap: 3px;
+  }
+
+  .value-line strong {
+    font-size: clamp(27px, 8vw, 38px);
+    letter-spacing: -1.3px;
+  }
+
+  .value-line > span {
+    font-size: 13px;
+  }
+
+  .reading-note {
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .analysis {
+    padding: 17px 13px;
+  }
+
+  .analysis-item {
+    gap: 10px;
+    padding: 12px 10px;
+  }
+
+  .analysis-content strong {
+    font-size: 16px;
+  }
+
+  .analysis-content p {
+    font-size: 11px;
+    line-height: 1.65;
+  }
+}
+
+@media (max-width: 360px) {
+  .readings {
+    grid-template-columns: 1fr;
+  }
+
+  .reading-card {
+    min-height: 140px;
+    padding: 17px;
+  }
+
+  .value-line strong {
+    font-size: 40px;
+  }
+
+  .analysis-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
