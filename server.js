@@ -1,4 +1,5 @@
-﻿const express = require("express");
+﻿require("dotenv").config({ path: ".env.local" });
+const express = require("express");
 const os = require("os");
 const app = express();
 const PORT = 3000;
@@ -58,6 +59,18 @@ app.get("/api/status", (req, res) => {
   });
 });
 
+
+app.get("/api/ac-state", require("./api/ac-state"));
+app.post("/api/ac-command", async (req, res) => {
+  try {
+    await require("./api/ac-command")(req, res);
+  } catch (error) {
+    console.error("AC command route error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Kesalahan server AC" });
+    }
+  }
+});
 app.listen(PORT, "0.0.0.0", () => {
   console.log("\n==================================");
   console.log("  WEB MONITORING DHT22 AKTIF");
@@ -75,3 +88,5 @@ app.listen(PORT, "0.0.0.0", () => {
 
   console.log("\nMenunggu data dari ESP32-S3...");
 });
+
+
