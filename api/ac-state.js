@@ -17,7 +17,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const url = base.replace(/\/+$/, "") +
-      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,mode,updated_by,updated_at&limit=1";
+      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,econo,mode,updated_by,updated_at&limit=1";
 
     const response = await fetch(url, {
       headers: {

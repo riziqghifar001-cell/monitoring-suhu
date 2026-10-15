@@ -2,8 +2,9 @@
   "use strict";
   const $ = id => document.getElementById(id);
   const state = {
-    power: false, mode: "cool", temp: 24, acTempCommand: null, fan: "auto",
-    swing: true, control: "manual"
+    power: false, mode: "cool", temp: 24, acTempCommand: null,
+    fan: "auto", swing: true, quiet: false, turbo: false,
+    sleep: false, econo: false, control: "manual"
   };
 
   function init() {
@@ -59,11 +60,15 @@
           <div>
             <div class="ac-control-label">Kecepatan kipas</div>
             <div class="fan-options" id="ac-fans">
-              <button class="mini-choice" data-fan="quiet" type="button">Quiet</button>
               <button class="mini-choice" data-fan="low" type="button">Low</button>
               <button class="mini-choice" data-fan="medium" type="button">Med</button>
               <button class="mini-choice" data-fan="high" type="button">High</button>
-              <button class="mini-choice selected" data-fan="auto" type="button">Auto</button>
+              </div>
+            <div class="fan-options ac-feature-options" aria-label="Fitur AC">
+              <button class="mini-choice" data-feature="quiet" type="button" aria-pressed="false">Quiet</button>
+              <button class="mini-choice" data-feature="turbo" type="button" aria-pressed="false">Turbo</button>
+              <button class="mini-choice" data-feature="econo" type="button" aria-pressed="false">Econo</button>
+              <button class="mini-choice" data-feature="sleep" type="button" aria-pressed="false">Sleep</button>
             </div>
           </div>
           <button id="ac-swing" class="swing-button selected" type="button" aria-pressed="true">
@@ -130,12 +135,11 @@
     }
 
     async function sendACCommand() {
-
       const mode = state.control === "manual" ? "manual" : "auto";
       const acMode = ["cool", "dry", "fan", "heat"].includes(state.mode)
         ? state.mode : "cool";
-      const fan = ["auto", "low", "med", "high"].includes(state.fan)
-        ? state.fan : "auto";
+      const fan = state.fan === "medium" ? "med" :
+        (["auto", "low", "med", "high"].includes(state.fan) ? state.fan : "auto");
 
       const payload = {
         power: Boolean(state.power),
@@ -144,25 +148,23 @@
         ac_mode: acMode,
         fan,
         swing: Boolean(state.swing),
-        quiet: false,
-        turbo: false,
-        sleep: false,
-        econo: false
+        quiet: Boolean(state.quiet),
+        turbo: Boolean(state.turbo),
+        sleep: Boolean(state.sleep),
+        econo: Boolean(state.econo)
       };
 
       try {
         const response = await fetch("/api/ac-command", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Permintaan gagal");
-        feedback("Perintah tersimpan di Supabase. ID: " + result.command_id +
-          ". Belum memastikan AC menerima sinyal IR.");
+        feedback("Perintah tersimpan di Supabase. ID: " +
+          (result.command_id ?? "tersimpan") +
+          ". Pengiriman IR dan respons fisik AC belum terkonfirmasi.");
         return true;
       } catch (error) {
         feedback("Gagal mengirim perintah: " + error.message);
@@ -192,11 +194,19 @@
       } else {
         state.acTempCommand = null;
       }
-        if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) state.mode = a.ac_mode;
-        if (["auto", "low", "med", "high"].includes(a.fan)) state.fan = a.fan;
-        if (typeof a.swing === "boolean") state.swing = a.swing;
+        if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) {
+          state.mode = a.ac_mode;
+        }
+        if (["auto", "low", "med", "medium", "high"].includes(a.fan)) {
+          state.fan = a.fan === "medium" ? "med" : a.fan;
+        }
+        for (const key of ["quiet", "turbo", "sleep", "econo", "swing"]) {
+          if (typeof a[key] === "boolean") state[key] = a[key];
+        }
         if (a.mode === "manual") state.control = "manual";
-        else if (a.mode === "auto" || a.mode === "auto_adaptive") state.control = "auto_adaptive";
+        else if (a.mode === "auto" || a.mode === "auto_adaptive") {
+          state.control = "auto_adaptive";
+        }
 
         render();
         feedback(deviceOnline ? "ESP32 ONLINE — status dibaca dari Supabase." : "ESP32 OFFLINE — data terakhir mungkin sudah lama. Periksa perangkat dan koneksi.");
@@ -232,7 +242,13 @@
       document.querySelectorAll("[data-mode]").forEach(b =>
         b.classList.toggle("selected", b.dataset.mode === state.mode));
       document.querySelectorAll("[data-fan]").forEach(b =>
-        b.classList.toggle("selected", b.dataset.fan === state.fan));
+        b.classList.toggle("selected",
+          (b.dataset.fan === "medium" ? "med" : b.dataset.fan) === state.fan));
+      document.querySelectorAll("[data-feature]").forEach(b => {
+        const key = b.dataset.feature;
+        b.classList.toggle("selected", Boolean(state[key]));
+        b.setAttribute("aria-pressed", String(Boolean(state[key])));
+      });
       $("ac-swing").classList.toggle("selected", state.swing);
       $("ac-swing").setAttribute("aria-pressed", String(state.swing));
       $("ac-swing").querySelector("span").textContent =
@@ -257,10 +273,18 @@
         sendACCommand();
       }));
     document.querySelectorAll("[data-fan]").forEach(b =>
-      b.addEventListener("click", () => {
-        state.fan = b.dataset.fan;
+      b.addEventListener("click", async () => {
+        state.fan = b.dataset.fan === "medium" ? "med" : b.dataset.fan;
         render();
-        sendACCommand();
+        await sendACCommand();
+      }));
+
+    document.querySelectorAll("[data-feature]").forEach(b =>
+      b.addEventListener("click", async () => {
+        const key = b.dataset.feature;
+        state[key] = !state[key];
+        render();
+        await sendACCommand();
       }));
     $("ac-swing").addEventListener("click", () => {
       state.swing = !state.swing;

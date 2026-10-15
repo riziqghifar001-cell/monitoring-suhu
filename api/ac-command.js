@@ -65,7 +65,7 @@ module.exports = async function handler(req, res) {
 
     if (!response.ok) {
       console.error("Supabase RPC error:", response.status, result);
-      return res.status(502).json({ error: "Gagal menyimpan perintah ke Supabase" });
+      return res.status(502).json({ error: (result && (result.message || result.details || result.hint)) || "Gagal menyimpan perintah ke Supabase", code: result && result.code });
     }
 
     return res.status(200).json(result);
