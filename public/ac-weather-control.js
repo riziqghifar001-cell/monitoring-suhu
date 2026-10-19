@@ -1,10 +1,12 @@
-(() => {
+﻿(() => {
   "use strict";
   const $ = id => document.getElementById(id);
+  let commandQueue = Promise.resolve();
+  let commandSending = false;
   const state = {
     power: false, mode: "cool", temp: 24, acTempCommand: null,
     fan: "auto", swing: true, quiet: false, turbo: false,
-    sleep: false, econo: false, control: "manual"
+    sleep: false, control: "manual"
   };
 
   function init() {
@@ -53,7 +55,6 @@
           <button class="choice-button selected" data-mode="cool" type="button"><span>❄</span> Cool</button>
           <button class="choice-button" data-mode="dry" type="button"><span>◉</span> Dry</button>
           <button class="choice-button" data-mode="fan" type="button"><span>≋</span> Fan</button>
-          <button class="choice-button" data-mode="auto" type="button"><span>⟳</span> Auto</button>
         </div>
 
         <div class="ac-options">
@@ -67,7 +68,6 @@
             <div class="fan-options ac-feature-options" aria-label="Fitur AC">
               <button class="mini-choice" data-feature="quiet" type="button" aria-pressed="false">Quiet</button>
               <button class="mini-choice" data-feature="turbo" type="button" aria-pressed="false">Turbo</button>
-              <button class="mini-choice" data-feature="econo" type="button" aria-pressed="false">Econo</button>
               <button class="mini-choice" data-feature="sleep" type="button" aria-pressed="false">Sleep</button>
             </div>
           </div>
@@ -134,7 +134,7 @@
       $("ac-feedback").textContent = message;
     }
 
-    async function sendACCommand() {
+    async function sendACCommandNow() {
       const mode = state.control === "manual" ? "manual" : "auto";
       const acMode = ["cool", "dry", "fan", "heat"].includes(state.mode)
         ? state.mode : "cool";
@@ -151,7 +151,7 @@
         quiet: Boolean(state.quiet),
         turbo: Boolean(state.turbo),
         sleep: Boolean(state.sleep),
-        econo: Boolean(state.econo)
+        econo: false
       };
 
       try {
@@ -171,7 +171,19 @@
         return false;
       }
     }
+    function sendACCommand() {
+      commandQueue = commandQueue.catch(() => {}).then(async () => {
+        commandSending = true;
+        try {
+          await sendACCommandNow();
+        } finally {
+          commandSending = false;
+        }
+      });
+      return commandQueue;
+    }
     async function loadACState() {
+      if (commandSending) return;
       try {
         const response = await fetch("/api/ac-state", { cache: "no-store" });
         if (!response.ok) throw new Error("HTTP " + response.status);
@@ -200,7 +212,7 @@
         if (["auto", "low", "med", "medium", "high"].includes(a.fan)) {
           state.fan = a.fan === "medium" ? "med" : a.fan;
         }
-        for (const key of ["quiet", "turbo", "sleep", "econo", "swing"]) {
+        for (const key of ["quiet", "turbo", "sleep", "swing"]) {
           if (typeof a[key] === "boolean") state[key] = a[key];
         }
         if (a.mode === "manual") state.control = "manual";
@@ -373,3 +385,4 @@
     document.addEventListener("DOMContentLoaded", init, { once: true });
   } else init();
 })();
+
