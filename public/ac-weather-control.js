@@ -102,6 +102,44 @@
         </button>
       </div>
       <p id="ac-feedback" class="ac-feedback" role="status">Tampilan siap.</p>
+
+      <!-- WIDGET OPEN-METEO & PERBANDINGAN -->
+      <div class="weather-heading">
+        <div>
+          <p class="eyebrow">OPEN-METEO · SURAKARTA</p>
+          <h2>Cuaca di luar</h2>
+        </div>
+        <span id="weather-indicator" class="weather-indicator">Memuat...</span>
+      </div>
+
+      <div class="weather-grid">
+        <article class="weather-card outdoor">
+          <span class="weather-icon">☀</span>
+          <span class="muted-label">Suhu luar</span>
+          <div class="weather-value"><strong id="out-temp">--</strong><span>°C</span></div>
+          <p id="out-condition">Mengambil data cuaca</p>
+        </article>
+        <article class="weather-card">
+          <span class="weather-icon">◌</span>
+          <span class="muted-label">Kelembapan luar</span>
+          <div class="weather-value"><strong id="out-hum">--</strong><span>%</span></div>
+          <p>Kelembapan relatif</p>
+        </article>
+      </div>
+
+      <div class="comparison-card">
+        <div class="comparison-title">
+          <div><p class="eyebrow">PERBANDINGAN</p><h3>Kamar vs luar</h3></div>
+          <span id="compare-badge" class="compare-badge">Menunggu data</span>
+        </div>
+        <div class="compare-values">
+          <div><span>Kamar · DHT22</span><strong id="compare-in">-- °C</strong></div>
+          <div><span>Luar · Open-Meteo</span><strong id="compare-out">-- °C</strong></div>
+        </div>
+        <div class="delta-line"><span>Selisih suhu</span><strong id="compare-delta">--</strong></div>
+        <p id="compare-note" class="smart-sub">Perbandingan muncul saat kedua sumber memiliki data valid.</p>
+        <p id="weather-time" class="weather-time">Pembaruan: menunggu data</p>
+      </div>
     `;
     main.appendChild(panel);
 
@@ -124,7 +162,7 @@
         quiet: Boolean(state.quiet),
         turbo: Boolean(state.turbo),
         sleep: Boolean(state.sleep),
-        sync_power: Boolean(isPowerAction) // Memaksa ESP32 menyelaraskan status daya seketika
+        sync_power: Boolean(isPowerAction)
       };
 
       try {
@@ -240,6 +278,60 @@
       $("ac-auto").setAttribute("aria-checked", String(state.control === "auto_adaptive"));
     }
 
+    function compare() {
+      const roomEl = $("temperature");
+      const room = roomEl ? Number(roomEl.textContent) : NaN;
+      const outside = Number($("out-temp").dataset.value);
+      const validRoom = roomEl && roomEl.textContent.trim() !== "--" && Number.isFinite(room);
+      const validOutside = Number.isFinite(outside);
+      $("compare-in").textContent = validRoom ? room.toFixed(1) + " °C" : "-- °C";
+      $("compare-out").textContent = validOutside ? outside.toFixed(1) + " °C" : "-- °C";
+      if (!validRoom || !validOutside) {
+        $("compare-delta").textContent = "--";
+        $("compare-badge").textContent = "Menunggu data";
+        $("compare-note").textContent = "Pastikan sensor kamar online dan data cuaca tersedia.";
+        return;
+      }
+      const delta = room - outside;
+      $("compare-delta").textContent = (delta > 0 ? "+" : "") + delta.toFixed(1) + " °C";
+      $("compare-badge").textContent = Math.abs(delta) < 0.5 ? "Hampir sama" : delta > 0 ? "Kamar lebih panas" : "Luar lebih panas";
+      $("compare-note").textContent = delta > 0 ? "Suhu kamar lebih tinggi daripada suhu luar." : delta < 0 ? "Suhu kamar lebih rendah daripada suhu luar." : "Suhu kamar dan luar hampir sama.";
+    }
+
+    async function loadWeather() {
+      $("weather-indicator").textContent = "Memperbarui...";
+      try {
+        const url = new URL("https://api.open-meteo.com/v1/forecast");
+        url.search = new URLSearchParams({
+          latitude: "-7.5755",
+          longitude: "110.8243",
+          current: "temperature_2m,relative_humidity_2m,weather_code",
+          timezone: "Asia/Jakarta"
+        });
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const data = await response.json();
+        const c = data.current;
+        if (!c || !Number.isFinite(c.temperature_2m) || !Number.isFinite(c.relative_humidity_2m)) throw new Error("Data tidak valid");
+        $("out-temp").textContent = c.temperature_2m.toFixed(1);
+        $("out-temp").dataset.value = String(c.temperature_2m);
+        $("out-hum").textContent = c.relative_humidity_2m;
+        $("out-condition").textContent = "Suhu udara 2 meter";
+        $("weather-indicator").textContent = "● Live";
+        $("weather-time").textContent = "Data cuaca: " +
+          new Date(c.time).toLocaleString("id-ID", {
+            timeZone: "Asia/Jakarta", day: "2-digit", month: "short",
+            hour: "2-digit", minute: "2-digit"
+          }) + " WIB · cek tiap 60 detik";
+        compare();
+      } catch (err) {
+        $("weather-indicator").textContent = "Tidak tersedia";
+        $("out-condition").textContent = "Gagal mengambil data cuaca";
+        $("weather-time").textContent = "Pembaruan gagal. Akan dicoba kembali.";
+        console.error("Open-Meteo:", err);
+      }
+    }
+
     $("ac-power").addEventListener("click", async () => { state.power = !state.power; render(); await sendACCommand(true); });
     $("ac-minus").addEventListener("click", async () => { state.temp = Math.max(16, state.temp - 1); render(); await sendACCommand(false); });
     $("ac-plus").addEventListener("click", async () => { state.temp = Math.min(30, state.temp + 1); render(); await sendACCommand(false); });
@@ -264,9 +356,16 @@
     $("ac-swing").addEventListener("click", () => { state.swing = !state.swing; render(); sendACCommand(false); });
     $("ac-auto").addEventListener("click", () => { state.control = state.control === "manual" ? "auto_adaptive" : "manual"; render(); sendACCommand(false); });
 
+    const roomObserver = new MutationObserver(compare);
+    const roomTemp = $("temperature");
+    if (roomTemp) roomObserver.observe(roomTemp, { childList: true, characterData: true, subtree: true });
+
     render();
     loadACState();
     setInterval(loadACState, 5000);
+    loadWeather();
+    setInterval(loadWeather, 60 * 1000);
+    setInterval(compare, 5000);
   }
 
   if (document.readyState === "loading") {
