@@ -51,10 +51,12 @@
           <div>
             <span class="muted-label" style="font-size:11px">Estimasi Energi Bulan Ini</span>
             <div style="font-size:18px;font-weight:700"><span id="ac-est-kwh">0.00</span> kWh</div>
+            <div style="font-size:11px;color:#555;margin-top:2px">Sisa Bulan: <strong id="ac-sisa-bulan">0.00</strong> kWh</div>
           </div>
           <div style="text-align:right">
             <span class="muted-label" style="font-size:11px">Estimasi Biaya / Anggaran</span>
             <div style="font-size:16px;font-weight:700;color:#1b5e20">Rp <span id="ac-est-biaya">0</span> / Rp 100k</div>
+            <div style="font-size:11px;color:#1b5e20;margin-top:2px">Sisa Hari Ini: <strong id="ac-sisa-harian">0.00</strong> kWh</div>
           </div>
         </div>
 
@@ -199,6 +201,8 @@
 
         if (a.est_kwh_bulan_ini !== undefined) state.estKwh = Number(a.est_kwh_bulan_ini) || 0;
         if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;
+        if (a.sisa_kwh_bulanan !== undefined) state.sisaBulan = Number(a.sisa_kwh_bulanan) || 0;
+        if (a.sisa_kwh_harian !== undefined) state.sisaHarian = Number(a.sisa_kwh_harian) || 0;
 
         if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) state.mode = a.ac_mode;
         if (["auto", "low", "med", "medium", "high"].includes(a.fan)) state.fan = a.fan === "medium" ? "med" : a.fan;
@@ -220,6 +224,8 @@
       $("ac-temp").textContent = state.temp;
       if ($("ac-est-kwh")) $("ac-est-kwh").textContent = state.estKwh.toFixed(2);
       if ($("ac-est-biaya")) $("ac-est-biaya").textContent = Math.round(state.estBiaya).toLocaleString("id-ID");
+      if ($("ac-sisa-bulan")) $("ac-sisa-bulan").textContent = (state.sisaBulan || 0).toFixed(2);
+      if ($("ac-sisa-harian")) $("ac-sisa-harian").textContent = (state.sisaHarian || 0).toFixed(2);
 
       $("ac-power-label").textContent = state.power ? "Menyala" : "Mati";
       $("ac-power-text").textContent = state.power ? "Matikan" : "Nyalakan";

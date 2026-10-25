@@ -18,7 +18,7 @@
   try {
     // Menambahkan est_kwh_bulan_ini dan est_biaya_bulan_ini ke dalam select
     const url = base.replace(/\/+$/, "") +
-      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,mode,est_kwh_bulan_ini,est_biaya_bulan_ini,updated_by,updated_at&limit=1";
+      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,mode,est_kwh_bulan_ini,est_biaya_bulan_ini,sisa_kwh_bulanan,sisa_kwh_harian,updated_by,updated_at&limit=1";
 
     const response = await fetch(url, {
       headers: {

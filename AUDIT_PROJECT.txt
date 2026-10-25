@@ -1,0 +1,2800 @@
+AUDIT LENGKAP PROJECT
+Folder: C:\Users\LENOVO\Downloads\monitoring-dht22
+Tanggal: 2026-10-26 05.44.10
+Jumlah file teks: 14
+==========================================================================================
+
+==========================================================================================
+FILE: .gitignore
+UKURAN: 121 bytes
+==========================================================================================
+node_modules/
+.env
+.env.*
+!.env.example
+.vercel/
+.DS_Store
+
+# Backup lokal
+backup-*/
+public/*.backup-*
+.vercel
+.env*
+
+
+==========================================================================================
+FILE: ADD_AC_TEMP_COMMAND.sql
+UKURAN: 453 bytes
+==========================================================================================
+ALTER TABLE public.ac_state
+ADD COLUMN IF NOT EXISTS ac_temp_command integer;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.ac_state'::regclass
+      AND conname = 'ac_state_ac_temp_command_range'
+  ) THEN
+    ALTER TABLE public.ac_state
+      ADD CONSTRAINT ac_state_ac_temp_command_range
+      CHECK (
+        ac_temp_command IS NULL OR
+        ac_temp_command BETWEEN 16 AND 30
+      );
+  END IF;
+END $$;
+
+==========================================================================================
+FILE: api\ac-command.js
+UKURAN: 2474 bytes
+==========================================================================================
+module.exports = async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(500).json({ error: "Konfigurasi server belum lengkap" });
+  }
+
+  try {
+    const b = req.body || {};
+    const command = {
+      mode: b.mode,
+      power: b.power,
+      temp: Number(b.temp),
+      ac_mode: b.ac_mode,
+      fan: b.fan,
+      swing: b.swing,
+      quiet: b.quiet,
+      turbo: b.turbo,
+      sleep: b.sleep
+    };
+
+    if (!["manual", "auto"].includes(command.mode))
+      return res.status(400).json({ error: "Mode kontrol tidak valid" });
+
+    if (typeof command.power !== "boolean")
+      return res.status(400).json({ error: "Power tidak valid" });
+
+    if (!Number.isInteger(command.temp) || command.temp < 16 || command.temp > 30)
+      return res.status(400).json({ error: "Suhu harus 16-30°C" });
+
+    if (!["cool", "dry", "fan", "heat"].includes(command.ac_mode))
+      return res.status(400).json({ error: "Mode AC tidak valid" });
+
+    if (!["auto", "low", "med", "medium", "high"].includes(command.fan))
+      return res.status(400).json({ error: "Kipas tidak valid" });
+
+    for (const key of ["swing", "quiet", "turbo", "sleep"]) {
+      if (typeof command[key] !== "boolean")
+        return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
+    }
+
+    const response = await fetch(
+      supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/set_ac_command",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": serviceKey,
+          "Authorization": "Bearer " + serviceKey
+        },
+        body: JSON.stringify({ p_command: command })
+      }
+    );
+
+    const result = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      console.error("Supabase RPC error:", response.status, result);
+      return res.status(502).json({ error: (result && (result.message || result.details || result.hint)) || "Gagal menyimpan perintah ke Supabase", code: result && result.code });
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Kesalahan server" });
+  }
+};
+
+
+==========================================================================================
+FILE: api\ac-state.js
+UKURAN: 1713 bytes
+==========================================================================================
+module.exports = async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const base = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!base || !key) {
+    return res.status(500).json({
+      error: "Konfigurasi Supabase server belum lengkap"
+    });
+  }
+
+  try {
+    // Menambahkan est_kwh_bulan_ini dan est_biaya_bulan_ini ke dalam select
+    const url = base.replace(/\/+$/, "") +
+      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,mode,est_kwh_bulan_ini,est_biaya_bulan_ini,updated_by,updated_at&limit=1";
+
+    const response = await fetch(url, {
+      headers: {
+        apikey: key,
+        Authorization: "Bearer " + key
+      },
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      console.error("Supabase:", response.status, await response.text());
+      return res.status(502).json({ error: "Gagal membaca status AC" });
+    }
+
+    const rows = await response.json();
+    const state = rows[0] || null;
+    const lastSeenMs = state && state.updated_at ? Date.parse(state.updated_at) : NaN;
+    const ageMs = Date.now() - lastSeenMs;
+    const online = Number.isFinite(lastSeenMs) && ageMs >= -5000 && ageMs <= 45000;
+    
+    return res.status(200).json({
+      state,
+      device: {
+        online,
+        last_seen: state && state.updated_at ? state.updated_at : null
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Kesalahan server" });
+  }
+};
+
+
+==========================================================================================
+FILE: index.ts
+UKURAN: 7353 bytes
+==========================================================================================
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const DEVICE_TOKEN = Deno.env.get("DEVICE_TOKEN");
+
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !DEVICE_TOKEN) {
+  throw new Error("Secret SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, atau DEVICE_TOKEN belum tersedia");
+}
+
+const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, content-type, x-device-token, apikey",
+  "Content-Type": "application/json",
+};
+
+const FIELDS = [
+  "power",
+  "temp",
+  "ac_temp_command",
+  "ac_mode",
+  "fan",
+  "swing",
+  "quiet",
+  "turbo",
+  "sleep",
+  "mode",
+];
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: cors });
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function validDeviceId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 100;
+}
+
+function validState(state: any) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return false;
+
+  if (state.temp !== undefined && (!Number.isInteger(state.temp) || state.temp < 16 || state.temp > 30)) return false;
+  if (state.power !== undefined && state.power !== null && typeof state.power !== "boolean") return false;
+
+  for (const key of ["swing", "quiet", "turbo", "sleep"]) {
+    if (state[key] !== undefined && typeof state[key] !== "boolean") return false;
+  }
+
+  if (state.ac_mode !== undefined && !["cool", "dry", "fan", "heat"].includes(state.ac_mode)) return false;
+  if (state.fan !== undefined && !["auto", "low", "med", "medium", "high"].includes(state.fan)) return false;
+  if (state.mode !== undefined && !["manual", "auto"].includes(state.mode)) return false;
+
+  return true;
+}
+
+async function merge(deviceId: string, patch: any, by: string, baseRev?: number) {
+  if (!validDeviceId(deviceId)) throw new Error("device_id tidak valid");
+  if (!validState(patch)) throw new Error("Format state tidak valid");
+
+  const { data: current, error: readError } = await db.from("ac_state").select("*").eq("device_id", deviceId).maybeSingle();
+  if (readError) throw readError;
+
+  const currentRev = Number(current?.rev ?? 0);
+  if (baseRev !== undefined && baseRev !== currentRev) {
+    return { conflict: true, rev: currentRev, state: current };
+  }
+
+  const update: Record<string, unknown> = {
+    rev: currentRev + 1,
+    updated_by: by,
+    updated_at: new Date().toISOString(),
+  };
+
+  for (const key of FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      update[key] = patch[key];
+    }
+  }
+
+  let result;
+  if (current) {
+    const { data, error } = await db.from("ac_state").update(update).eq("device_id", deviceId).eq("rev", currentRev).select().maybeSingle();
+    if (error) throw error;
+    result = data;
+  } else {
+    const { data, error } = await db.from("ac_state").insert({
+      device_id: deviceId,
+      ...update,
+      ...Object.fromEntries(FIELDS.filter((key) => Object.prototype.hasOwnProperty.call(patch, key)).map((key) => [key, patch[key]])),
+    }).select().single();
+    if (error) throw error;
+    result = data;
+  }
+
+  if (!result) {
+    const { data: latest, error } = await db.from("ac_state").select("*").eq("device_id", deviceId).maybeSingle();
+    if (error) throw error;
+    return { conflict: true, rev: Number(latest?.rev ?? 0), state: latest };
+  }
+
+  return { conflict: false, rev: result.rev, state: result };
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  if (req.method !== "POST") return json({ success: false, error: "Gunakan POST" }, 405);
+
+  let body: any;
+  try { body = await req.json(); } catch { return json({ success: false, error: "JSON request tidak valid" }, 400); }
+
+  try {
+    const deviceAction = ["sensor", "get_state", "report_state"].includes(body.action);
+    const deviceAuthorized = Boolean(DEVICE_TOKEN) && req.headers.get("x-device-token") === DEVICE_TOKEN;
+
+    if (deviceAction && !deviceAuthorized) return json({ success: false, error: "Token perangkat tidak valid" }, 401);
+    if (deviceAction && !validDeviceId(body.device_id)) return json({ success: false, error: "device_id tidak valid" }, 400);
+
+    if (body.action === "sensor") {
+      const suhu = body.suhu;
+      const kelembapan = body.kelembapan;
+      if (typeof suhu !== "number" || typeof kelembapan !== "number" || !Number.isFinite(suhu) || !Number.isFinite(kelembapan)) {
+        return json({ success: false, error: "Nilai suhu/kelembapan tidak valid" }, 400);
+      }
+
+      const row = {
+        device_id: body.device_id,
+        suhu,
+        kelembapan,
+        control_mode: ["manual", "auto"].includes(body.control_mode) ? body.control_mode : "manual",
+        desired_power: body.desired_power === true ? "true" : body.desired_power === false ? "false" : "unknown",
+        ac_temp_command: body.ac_temp_command ?? null,
+        ac_mode_command: body.ac_mode_command ?? null,
+        last_action: body.last_action ?? null,
+      };
+
+      const { data, error } = await db.from("sensor_readings").insert(row).select("id, device_id, suhu, kelembapan, recorded_at").single();
+      if (error) return json({ success: false, error: "Gagal menyimpan sensor", details: error.message }, 500);
+
+      return json({ success: true, message: "Data sensor tersimpan", data });
+    }
+
+    if (body.action === "get_state") {
+      const { data, error } = await db.from("ac_state").select("*").eq("device_id", body.device_id).maybeSingle();
+      if (error) throw error;
+      const sinceRev = Number(body.since_rev ?? 0);
+      return json({ state: data && Number(data.rev) > sinceRev ? data : null });
+    }
+
+    if (body.action === "report_state") {
+      if (!body.state || typeof body.state !== "object") return json({ success: false, error: "State tidak valid" }, 400);
+      const result = await merge(body.device_id, body.state, "device", Number(body.base_rev ?? 0));
+      return json(result);
+    }
+
+    if (body.action === "set_state") {
+      const authorization = req.headers.get("Authorization");
+      if (!authorization?.startsWith("Bearer ")) return json({ success: false, error: "Login diperlukan" }, 401);
+
+      const userClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: authorization } } });
+      const { data: userData, error: userError } = await userClient.auth.getUser();
+      if (userError || !userData.user) return json({ success: false, error: "Sesi login tidak valid" }, 401);
+
+      if (!validDeviceId(body.device_id) || !validState(body.state)) return json({ success: false, error: "Device ID atau state tidak valid" }, 400);
+
+      const result = await merge(body.device_id, body.state, "web", body.base_rev === undefined ? undefined : Number(body.base_rev));
+      return json(result);
+    }
+
+    return json({ success: false, error: "Action tidak dikenal" }, 400);
+  } catch (error) {
+    return json({ success: false, error: "Operasi database gagal", details: errorMessage(error) }, 500);
+  }
+});
+
+
+==========================================================================================
+FILE: package.json
+UKURAN: 262 bytes
+==========================================================================================
+{
+  "name": "monitoring-dht22",
+  "version": "1.0.0",
+  "description": "Dashboard monitoring ESP32-S3 dan DHT22",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.7",
+    "express": "^5.1.0"
+  }
+}
+
+
+==========================================================================================
+FILE: package-lock.json
+UKURAN: 30196 bytes
+==========================================================================================
+{
+  "name": "monitoring-dht22",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "monitoring-dht22",
+      "version": "1.0.0",
+      "dependencies": {
+        "dotenv": "^18.0.7",
+        "express": "^5.1.0"
+      }
+    },
+    "node_modules/accepts": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/accepts/-/accepts-2.0.0.tgz",
+      "integrity": "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==",
+      "license": "MIT",
+      "dependencies": {
+        "mime-types": "^3.0.0",
+        "negotiator": "^1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/body-parser": {
+      "version": "2.3.0",
+      "resolved": "https://registry.npmjs.org/body-parser/-/body-parser-2.3.0.tgz",
+      "integrity": "sha512-2cGmJupaNgg+QUwVLAucDuWuoMZ6EX9iHDRswZ5lsNYEmwPaRknMPCLZz07yTzVq/83p4o/wzbDZbBrTvGGTIw==",
+      "license": "MIT",
+      "dependencies": {
+        "bytes": "^3.1.2",
+        "content-type": "^2.0.0",
+        "debug": "^4.4.3",
+        "http-errors": "^2.0.1",
+        "iconv-lite": "^0.7.2",
+        "on-finished": "^2.4.1",
+        "qs": "^6.15.2",
+        "raw-body": "^3.0.2",
+        "type-is": "^2.1.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/bytes": {
+      "version": "3.1.2",
+      "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz",
+      "integrity": "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/call-bind-apply-helpers": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz",
+      "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0",
+        "function-bind": "^1.1.2"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/call-bound": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz",
+      "integrity": "sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bind-apply-helpers": "^1.0.2",
+        "get-intrinsic": "^1.3.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/content-disposition": {
+      "version": "2.0.1",
+      "resolved": "https://registry.npmjs.org/content-disposition/-/content-disposition-2.0.1.tgz",
+      "integrity": "sha512-e+H0ZXHSWYrENhQzw1LPuP4oF5MzVKmDU6d3hxlvaPEYLLg62MxtQNPRx4SYSuYJSBUgnQIG4HIN2tEtNv7Dog==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/content-type": {
+      "version": "2.1.0",
+      "resolved": "https://registry.npmjs.org/content-type/-/content-type-2.1.0.tgz",
+      "integrity": "sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/cookie": {
+      "version": "0.7.2",
+      "resolved": "https://registry.npmjs.org/cookie/-/cookie-0.7.2.tgz",
+      "integrity": "sha512-yki5XnKuf750l50uGTllt6kKILY4nQ1eNIQatoXEByZ5dWgnKqbnqmTrBE5B4N7lrMJKQ2ytWMiTO2o0v6Ew/w==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/cookie-signature": {
+      "version": "1.2.2",
+      "resolved": "https://registry.npmjs.org/cookie-signature/-/cookie-signature-1.2.2.tgz",
+      "integrity": "sha512-D76uU73ulSXrD1UXF4KE2TMxVVwhsnCgfAyTg9k8P6KGZjlXKrOLe4dJQKI3Bxi5wjesZoFXJWElNWBjPZMbhg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.6.0"
+      }
+    },
+    "node_modules/debug": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
+      "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
+      "license": "MIT",
+      "dependencies": {
+        "ms": "^2.1.3"
+      },
+      "engines": {
+        "node": ">=6.0"
+      },
+      "peerDependenciesMeta": {
+        "supports-color": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/depd": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/depd/-/depd-2.0.0.tgz",
+      "integrity": "sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/dotenv": {
+      "version": "18.0.7",
+      "resolved": "https://registry.npmjs.org/dotenv/-/dotenv-18.0.7.tgz",
+      "integrity": "sha512-QEvMEF8ca3GNZJJnAbOgxpj5ULhBvnMcURp+XKrtvqFNPgjBvYoswQ0Jl2cO7JzCjxZjJhr9ZuIEhlrRxMft/Q==",
+      "license": "BSD-2-Clause",
+      "bin": {
+        "dotenv": "dist/index.cjs"
+      },
+      "engines": {
+        "node": ">=12"
+      },
+      "funding": {
+        "url": "https://dotenvx.com"
+      }
+    },
+    "node_modules/dunder-proto": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz",
+      "integrity": "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bind-apply-helpers": "^1.0.1",
+        "es-errors": "^1.3.0",
+        "gopd": "^1.2.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/ee-first": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz",
+      "integrity": "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==",
+      "license": "MIT"
+    },
+    "node_modules/encodeurl": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.0.tgz",
+      "integrity": "sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/es-define-property": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz",
+      "integrity": "sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/es-errors": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz",
+      "integrity": "sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/es-object-atoms": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
+      "integrity": "sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/escape-html": {
+      "version": "1.0.3",
+      "resolved": "https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz",
+      "integrity": "sha512-NiSupZ4OeuGwr68lGIeym/ksIZMJodUGOSCZ/FSnTxcrekbvqrgdUxlJOMpijaKZVjAJrWrGs/6Jy8OMuyj9ow==",
+      "license": "MIT"
+    },
+    "node_modules/etag": {
+      "version": "1.8.1",
+      "resolved": "https://registry.npmjs.org/etag/-/etag-1.8.1.tgz",
+      "integrity": "sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/express": {
+      "version": "5.3.0",
+      "resolved": "https://registry.npmjs.org/express/-/express-5.3.0.tgz",
+      "integrity": "sha512-qCqy1xSoaugxOD4IVHb1ZWdkvCF2W3aE2okKouWj8VwJ+ztskSiXoBnCSJqfKT+cVPJhuJqe9YLbY425+Zh00g==",
+      "license": "MIT",
+      "dependencies": {
+        "accepts": "^2.0.0",
+        "body-parser": "^2.3.0",
+        "content-disposition": "^2.0.1",
+        "content-type": "^2.0.0",
+        "cookie": "^0.7.1",
+        "cookie-signature": "^1.2.1",
+        "debug": "^4.4.0",
+        "depd": "^2.0.0",
+        "encodeurl": "^2.0.0",
+        "escape-html": "^1.0.3",
+        "etag": "^1.8.1",
+        "finalhandler": "^2.1.0",
+        "fresh": "^2.0.0",
+        "http-errors": "^2.0.0",
+        "merge-descriptors": "^2.0.0",
+        "mime-types": "^3.0.0",
+        "on-finished": "^2.4.1",
+        "once": "^1.4.0",
+        "parseurl": "^1.3.3",
+        "proxy-addr": "^2.0.8",
+        "qs": "^6.16.0",
+        "range-parser": "^1.2.1",
+        "router": "^2.2.0",
+        "send": "^1.1.0",
+        "serve-static": "^2.2.0",
+        "statuses": "^2.0.1",
+        "type-is": "^2.1.0",
+        "vary": "^1.1.2"
+      },
+      "engines": {
+        "node": ">= 18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/finalhandler": {
+      "version": "2.1.1",
+      "resolved": "https://registry.npmjs.org/finalhandler/-/finalhandler-2.1.1.tgz",
+      "integrity": "sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "^4.4.0",
+        "encodeurl": "^2.0.0",
+        "escape-html": "^1.0.3",
+        "on-finished": "^2.4.1",
+        "parseurl": "^1.3.3",
+        "statuses": "^2.0.1"
+      },
+      "engines": {
+        "node": ">= 18.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/forwarded": {
+      "version": "0.2.0",
+      "resolved": "https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz",
+      "integrity": "sha512-buRG0fpBtRHSTCOASe6hD258tEubFoRLb4ZNA6NxMVHNw2gOcwHo9wyablzMzOA5z9xA9L1KNjk/Nt6MT9aYow==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/fresh": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/fresh/-/fresh-2.0.0.tgz",
+      "integrity": "sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/function-bind": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz",
+      "integrity": "sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/get-intrinsic": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz",
+      "integrity": "sha512-9fSjSaos/fRIVIp+xSJlE6lfwhES7LNtKaCBIamHsjr2na1BiABJPo0mOjjz8GJDURarmCPGqaiVg5mfjb98CQ==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bind-apply-helpers": "^1.0.2",
+        "es-define-property": "^1.0.1",
+        "es-errors": "^1.3.0",
+        "es-object-atoms": "^1.1.1",
+        "function-bind": "^1.1.2",
+        "get-proto": "^1.0.1",
+        "gopd": "^1.2.0",
+        "has-symbols": "^1.1.0",
+        "hasown": "^2.0.2",
+        "math-intrinsics": "^1.1.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/get-proto": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz",
+      "integrity": "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==",
+      "license": "MIT",
+      "dependencies": {
+        "dunder-proto": "^1.0.1",
+        "es-object-atoms": "^1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/gopd": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
+      "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/has-symbols": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz",
+      "integrity": "sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/hasown": {
+      "version": "2.0.4",
+      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
+      "integrity": "sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==",
+      "license": "MIT",
+      "dependencies": {
+        "function-bind": "^1.1.2"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/http-errors": {
+      "version": "2.0.1",
+      "resolved": "https://registry.npmjs.org/http-errors/-/http-errors-2.0.1.tgz",
+      "integrity": "sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==",
+      "license": "MIT",
+      "dependencies": {
+        "depd": "~2.0.0",
+        "inherits": "~2.0.4",
+        "setprototypeof": "~1.2.0",
+        "statuses": "~2.0.2",
+        "toidentifier": "~1.0.1"
+      },
+      "engines": {
+        "node": ">= 0.8"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/iconv-lite": {
+      "version": "0.7.3",
+      "resolved": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.7.3.tgz",
+      "integrity": "sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==",
+      "license": "MIT",
+      "dependencies": {
+        "safer-buffer": ">= 2.1.2 < 3.0.0"
+      },
+      "engines": {
+        "node": ">=0.10.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/inherits": {
+      "version": "2.0.4",
+      "resolved": "https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz",
+      "integrity": "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==",
+      "license": "ISC"
+    },
+    "node_modules/ipaddr.js": {
+      "version": "1.9.1",
+      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
+      "integrity": "sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.10"
+      }
+    },
+    "node_modules/is-promise": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/is-promise/-/is-promise-4.0.0.tgz",
+      "integrity": "sha512-hvpoI6korhJMnej285dSg6nu1+e6uxs7zG3BYAm5byqDsgJNWwxzM6z6iZiAgQR4TJ30JmBTOwqZUw3WlyH3AQ==",
+      "license": "MIT"
+    },
+    "node_modules/math-intrinsics": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz",
+      "integrity": "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/media-typer": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/media-typer/-/media-typer-1.1.1.tgz",
+      "integrity": "sha512-yz3xRaG20c6/BOzvYoDaGtPmGscs7YivItZEEqe6GbwNfHuxu9YNmvnEkMzKldAGY4/80pRcQRZSEnhquk9XuQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/merge-descriptors": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/merge-descriptors/-/merge-descriptors-2.0.0.tgz",
+      "integrity": "sha512-Snk314V5ayFLhp3fkUREub6WtjBfPdCPY1Ln8/8munuLuiYhsABgBVWsozAG+MWMbVEvcdcpbi9R7ww22l9Q3g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/mime-db": {
+      "version": "1.54.0",
+      "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.54.0.tgz",
+      "integrity": "sha512-aU5EJuIN2WDemCcAp2vFBfp/m4EAhWJnUNSSw0ixs7/kXbd6Pg64EmwJkNdFhB8aWt1sH2CTXrLxo/iAGV3oPQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/mime-types": {
+      "version": "3.0.2",
+      "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-3.0.2.tgz",
+      "integrity": "sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A==",
+      "license": "MIT",
+      "dependencies": {
+        "mime-db": "^1.54.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/ms": {
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+      "license": "MIT"
+    },
+    "node_modules/negotiator": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/negotiator/-/negotiator-1.1.0.tgz",
+      "integrity": "sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg==",
+      "license": "MIT",
+      "dependencies": {
+        "content-type": "^2.1.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/object-inspect": {
+      "version": "1.13.4",
+      "resolved": "https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz",
+      "integrity": "sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/on-finished": {
+      "version": "2.4.1",
+      "resolved": "https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz",
+      "integrity": "sha512-oVlzkg3ENAhCk2zdv7IJwd/QUD4z2RxRwpkcGY8psCVcCYZNq4wYnVWALHM+brtuJjePWiYF/ClmuDr8Ch5+kg==",
+      "license": "MIT",
+      "dependencies": {
+        "ee-first": "1.1.1"
+      },
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/once": {
+      "version": "1.4.0",
+      "resolved": "https://registry.npmjs.org/once/-/once-1.4.0.tgz",
+      "integrity": "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==",
+      "license": "ISC",
+      "dependencies": {
+        "wrappy": "1"
+      }
+    },
+    "node_modules/parseurl": {
+      "version": "1.3.3",
+      "resolved": "https://registry.npmjs.org/parseurl/-/parseurl-1.3.3.tgz",
+      "integrity": "sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/path-to-regexp": {
+      "version": "8.4.2",
+      "resolved": "https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-8.4.2.tgz",
+      "integrity": "sha512-qRcuIdP69NPm4qbACK+aDogI5CBDMi1jKe0ry5rSQJz8JVLsC7jV8XpiJjGRLLol3N+R5ihGYcrPLTno6pAdBA==",
+      "license": "MIT",
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/proxy-addr": {
+      "version": "2.0.8",
+      "resolved": "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz",
+      "integrity": "sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==",
+      "license": "MIT",
+      "dependencies": {
+        "forwarded": "0.2.0",
+        "ipaddr.js": "1.9.1"
+      },
+      "engines": {
+        "node": ">= 0.10"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/qs": {
+      "version": "6.16.0",
+      "resolved": "https://registry.npmjs.org/qs/-/qs-6.16.0.tgz",
+      "integrity": "sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA==",
+      "license": "BSD-3-Clause",
+      "dependencies": {
+        "es-define-property": "^1.0.1",
+        "side-channel": "^1.1.1"
+      },
+      "engines": {
+        "node": ">=0.6"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/range-parser": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/range-parser/-/range-parser-1.3.0.tgz",
+      "integrity": "sha512-hek2mFQpPuI4E1BBKrSto+BU3e3x4xuarsbiwr3+lf7p44juvFMV0XFWQAP3xUyqXA4RrXLIoaSUGbSt056ZMw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/raw-body": {
+      "version": "3.0.2",
+      "resolved": "https://registry.npmjs.org/raw-body/-/raw-body-3.0.2.tgz",
+      "integrity": "sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==",
+      "license": "MIT",
+      "dependencies": {
+        "bytes": "~3.1.2",
+        "http-errors": "~2.0.1",
+        "iconv-lite": "~0.7.0",
+        "unpipe": "~1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.10"
+      }
+    },
+    "node_modules/router": {
+      "version": "2.2.0",
+      "resolved": "https://registry.npmjs.org/router/-/router-2.2.0.tgz",
+      "integrity": "sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "^4.4.0",
+        "depd": "^2.0.0",
+        "is-promise": "^4.0.0",
+        "parseurl": "^1.3.3",
+        "path-to-regexp": "^8.0.0"
+      },
+      "engines": {
+        "node": ">= 18"
+      }
+    },
+    "node_modules/safer-buffer": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+      "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==",
+      "license": "MIT"
+    },
+    "node_modules/send": {
+      "version": "1.2.1",
+      "resolved": "https://registry.npmjs.org/send/-/send-1.2.1.tgz",
+      "integrity": "sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "^4.4.3",
+        "encodeurl": "^2.0.0",
+        "escape-html": "^1.0.3",
+        "etag": "^1.8.1",
+        "fresh": "^2.0.0",
+        "http-errors": "^2.0.1",
+        "mime-types": "^3.0.2",
+        "ms": "^2.1.3",
+        "on-finished": "^2.4.1",
+        "range-parser": "^1.2.1",
+        "statuses": "^2.0.2"
+      },
+      "engines": {
+        "node": ">= 18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/serve-static": {
+      "version": "2.2.1",
+      "resolved": "https://registry.npmjs.org/serve-static/-/serve-static-2.2.1.tgz",
+      "integrity": "sha512-xRXBn0pPqQTVQiC8wyQrKs2MOlX24zQ0POGaj0kultvoOCstBQM5yvOhAVSUwOMjQtTvsPWoNCHfPGwaaQJhTw==",
+      "license": "MIT",
+      "dependencies": {
+        "encodeurl": "^2.0.0",
+        "escape-html": "^1.0.3",
+        "parseurl": "^1.3.3",
+        "send": "^1.2.0"
+      },
+      "engines": {
+        "node": ">= 18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/setprototypeof": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz",
+      "integrity": "sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==",
+      "license": "ISC"
+    },
+    "node_modules/side-channel": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz",
+      "integrity": "sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0",
+        "object-inspect": "^1.13.4",
+        "side-channel-list": "^1.0.1",
+        "side-channel-map": "^1.0.1",
+        "side-channel-weakmap": "^1.0.2"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/side-channel-list": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.1.tgz",
+      "integrity": "sha512-mjn/0bi/oUURjc5Xl7IaWi/OJJJumuoJFQJfDDyO46+hBWsfaVM65TBHq2eoZBhzl9EchxOijpkbRC8SVBQU0w==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0",
+        "object-inspect": "^1.13.4"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/side-channel-map": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz",
+      "integrity": "sha512-VCjCNfgMsby3tTdo02nbjtM/ewra6jPHmpThenkTYh8pG9ucZ/1P8So4u4FGBek/BjpOVsDCMoLA/iuBKIFXRA==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bound": "^1.0.2",
+        "es-errors": "^1.3.0",
+        "get-intrinsic": "^1.2.5",
+        "object-inspect": "^1.13.3"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/side-channel-weakmap": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz",
+      "integrity": "sha512-WPS/HvHQTYnHisLo9McqBHOJk2FkHO/tlpvldyrnem4aeQp4hai3gythswg6p01oSoTl58rcpiFAjF2br2Ak2A==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bound": "^1.0.2",
+        "es-errors": "^1.3.0",
+        "get-intrinsic": "^1.2.5",
+        "object-inspect": "^1.13.3",
+        "side-channel-map": "^1.0.1"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/statuses": {
+      "version": "2.0.2",
+      "resolved": "https://registry.npmjs.org/statuses/-/statuses-2.0.2.tgz",
+      "integrity": "sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/toidentifier": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz",
+      "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.6"
+      }
+    },
+    "node_modules/type-is": {
+      "version": "2.1.0",
+      "resolved": "https://registry.npmjs.org/type-is/-/type-is-2.1.0.tgz",
+      "integrity": "sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==",
+      "license": "MIT",
+      "dependencies": {
+        "content-type": "^2.0.0",
+        "media-typer": "^1.1.0",
+        "mime-types": "^3.0.0"
+      },
+      "engines": {
+        "node": ">= 18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/unpipe": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/unpipe/-/unpipe-1.0.0.tgz",
+      "integrity": "sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/vary": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/vary/-/vary-1.1.2.tgz",
+      "integrity": "sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/wrappy": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz",
+      "integrity": "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==",
+      "license": "ISC"
+    }
+  }
+}
+
+
+==========================================================================================
+FILE: public\ac-control-panel.js
+UKURAN: 3029 bytes
+==========================================================================================
+(() => {
+  if (document.getElementById("ac-control-card")) return;
+
+  const card = document.createElement("section");
+  card.id = "ac-control-card";
+  card.style.cssText = "max-width:700px;margin:24px auto;padding:20px;border:1px solid #ccc;border-radius:14px;font:inherit";
+
+  card.innerHTML = `
+    <h2>Kontrol AC Daikin</h2>
+    <p>Perintah dikirim melalui server ke Supabase.</p>
+    <p><label>Power <select id="ac-power"><option value="true">ON</option><option value="false">OFF</option></select></label></p>
+    <p><label>Mode kontrol <select id="ac-mode"><option value="manual">Manual</option><option value="auto">Otomatis</option></select></label></p>
+    <p><label>Suhu <select id="ac-temp">${Array.from({length:15},(_,i)=>`<option value="${i+16}" ${i+16===27?"selected":""}>${i+16} °C</option>`).join("")}</select></label></p>
+    <p><label>Mode AC <select id="ac-kind"><option value="cool">Cool</option><option value="dry">Dry</option><option value="fan">Fan</option><option value="heat">Heat</option></select></label></p>
+    <p><label>Kipas <select id="ac-fan"><option value="auto">Auto</option><option value="low">Low</option><option value="med">Medium</option><option value="high">High</option></select></label></p>
+    <p><label><input id="ac-swing" type="checkbox"> Swing</label></p>
+    <p><label><input id="ac-quiet" type="checkbox"> Quiet</label></p>
+    <p><label><input id="ac-turbo" type="checkbox"> Turbo</label></p>
+    <p><label><input id="ac-sleep" type="checkbox"> Sleep</label></p>
+    <p><label><input id="ac-econo" type="checkbox"> Econo</label></p>
+    <button id="ac-send" type="button">Kirim perintah</button>
+    <p id="ac-status" role="status">Belum ada perintah dikirim.</p>
+  `;
+
+  (document.querySelector("main") || document.body).appendChild(card);
+
+  const $ = id => document.getElementById(id);
+
+  $("ac-send").addEventListener("click", async () => {
+const payload = {
+      power: $("ac-power").value === "true",
+      mode: $("ac-mode").value,
+      temp: Number($("ac-temp").value),
+      ac_mode: $("ac-kind").value,
+      fan: $("ac-fan").value,
+      swing: $("ac-swing").checked,
+      quiet: $("ac-quiet").checked,
+      turbo: $("ac-turbo").checked,
+      sleep: $("ac-sleep").checked,
+      econo: $("ac-econo").checked
+    };
+
+    const button = $("ac-send");
+    button.disabled = true;
+    $("ac-status").textContent = "Mengirim perintah...";
+
+    try {
+      const response = await fetch("/api/ac-command", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+},
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Permintaan gagal");
+
+      $("ac-status").textContent =
+        "Perintah tersimpan. ID: " + result.command_id +
+        ". Belum berarti AC sudah menerima sinyal IR.";
+    } catch (error) {
+      $("ac-status").textContent = "Gagal: " + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+
+
+==========================================================================================
+FILE: public\ac-weather-control.js
+UKURAN: 15991 bytes
+==========================================================================================
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  let commandQueue = Promise.resolve();
+  let commandSending = false;
+  let lastManualActionTime = 0;
+  const state = {
+    power: false, mode: "cool", temp: 24,
+    fan: "auto", swing: true, quiet: false, turbo: false,
+    sleep: false, control: "manual",
+    estKwh: 0, estBiaya: 0, budget: 100000
+  };
+
+  function init() {
+    if ($("smart-ac")) return;
+    const main = document.querySelector("main") || document.body;
+    const panel = document.createElement("section");
+    panel.id = "smart-ac";
+    panel.className = "smart-dashboard";
+    panel.innerHTML = `
+      <div class="smart-head">
+        <div>
+          <p class="eyebrow">SMART CLIMATE</p>
+          <h2>Kontrol AC</h2>
+          <p class="smart-sub">Daikin · Kontrol ruangan</p>
+        </div>
+        <span id="ac-state-badge" class="ac-badge">OFF</span>
+      </div>
+
+      <div class="ac-main-card">
+        <div class="ac-power-row">
+          <div>
+            <span class="muted-label">Status AC</span>
+            <div id="ac-power-label" class="ac-power-label">Mati</div>
+          </div>
+          <button id="ac-power" class="power-button" aria-pressed="false" type="button">
+            <span class="power-symbol">⏻</span><span id="ac-power-text">Nyalakan</span>
+          </button>
+        </div>
+
+        <div class="ac-temp-control">
+          <button id="ac-minus" class="round-button" aria-label="Kurangi suhu" type="button">−</button>
+          <div class="setpoint">
+            <div><strong id="ac-temp">24</strong><span>°C</span></div>
+            <small>Suhu target</small>
+          </div>
+          <button id="ac-plus" class="round-button" aria-label="Tambah suhu" type="button">+</button>
+        </div>
+
+        <div class="ac-energy-card" style="margin:0 16px 16px;padding:12px 14px;border:1px solid #d3e3fd;background:#f0f4f9;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <span class="muted-label" style="font-size:11px">Estimasi Energi Bulan Ini</span>
+            <div style="font-size:18px;font-weight:700"><span id="ac-est-kwh">0.00</span> kWh</div>
+          </div>
+          <div style="text-align:right">
+            <span class="muted-label" style="font-size:11px">Estimasi Biaya / Anggaran</span>
+            <div style="font-size:16px;font-weight:700;color:#1b5e20">Rp <span id="ac-est-biaya">0</span> / Rp 100k</div>
+          </div>
+        </div>
+
+        <div class="ac-control-label">Mode operasi</div>
+        <div class="ac-button-grid" id="ac-modes">
+          <button class="choice-button selected" data-mode="cool" type="button"><span>❄</span> Cool</button>
+          <button class="choice-button" data-mode="dry" type="button"><span>◉</span> Dry</button>
+          <button class="choice-button" data-mode="fan" type="button"><span>≋</span> Fan</button>
+        </div>
+
+        <div class="ac-options">
+          <div>
+            <div class="ac-control-label">Kecepatan kipas</div>
+            <div class="fan-options" id="ac-fans">
+              <button class="mini-choice" data-fan="low" type="button">Low</button>
+              <button class="mini-choice" data-fan="medium" type="button">Med</button>
+              <button class="mini-choice" data-fan="high" type="button">High</button>
+            </div>
+            <div class="fan-options ac-feature-options" aria-label="Fitur AC" style="margin-top:10px">
+              <button class="mini-choice" data-feature="quiet" type="button" aria-pressed="false">Quiet</button>
+              <button class="mini-choice" data-feature="turbo" type="button" aria-pressed="false">Turbo</button>
+              <button class="mini-choice" data-feature="sleep" type="button" aria-pressed="false">Sleep</button>
+            </div>
+          </div>
+          <button id="ac-swing" class="swing-button selected" type="button" aria-pressed="true">
+            ↕ <span>Swing aktif</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="ac-automation">
+        <div>
+          <p class="eyebrow">PENGATURAN CERDAS</p>
+          <h3>Auto Adaptive</h3>
+          <p class="smart-sub">Penyesuaian berdasarkan suhu kamar dan cuaca luar.</p>
+        </div>
+        <button id="ac-auto" class="toggle-button" role="switch" aria-checked="false" type="button">
+          <span></span>
+        </button>
+      </div>
+      <p id="ac-feedback" class="ac-feedback" role="status">Tampilan siap.</p>
+
+      <div class="weather-heading">
+        <div>
+          <p class="eyebrow">OPEN-METEO · SURAKARTA</p>
+          <h2>Cuaca di luar</h2>
+        </div>
+        <span id="weather-indicator" class="weather-indicator">Memuat...</span>
+      </div>
+
+      <div class="weather-grid">
+        <article class="weather-card outdoor">
+          <span class="weather-icon">☀</span>
+          <span class="muted-label">Suhu luar</span>
+          <div class="weather-value"><strong id="out-temp">--</strong><span>°C</span></div>
+          <p id="out-condition">Mengambil data cuaca</p>
+        </article>
+        <article class="weather-card">
+          <span class="weather-icon">◌</span>
+          <span class="muted-label">Kelembapan luar</span>
+          <div class="weather-value"><strong id="out-hum">--</strong><span>%</span></div>
+          <p>Kelembapan relatif</p>
+        </article>
+      </div>
+
+      <div class="comparison-card">
+        <div class="comparison-title">
+          <div><p class="eyebrow">PERBANDINGAN</p><h3>Kamar vs luar</h3></div>
+          <span id="compare-badge" class="compare-badge">Menunggu data</span>
+        </div>
+        <div class="compare-values">
+          <div><span>Kamar · DHT22</span><strong id="compare-in">-- °C</strong></div>
+          <div><span>Luar · Open-Meteo</span><strong id="compare-out">-- °C</strong></div>
+        </div>
+        <div class="delta-line"><span>Selisih suhu</span><strong id="compare-delta">--</strong></div>
+        <p id="compare-note" class="smart-sub">Perbandingan muncul saat kedua sumber memiliki data valid.</p>
+        <p id="weather-time" class="weather-time">Pembaruan: menunggu data</p>
+      </div>
+    `;
+    main.appendChild(panel);
+
+    function feedback(message) {
+      $("ac-feedback").textContent = message;
+    }
+
+    async function sendACCommandNow(isPowerAction = false) {
+      const mode = state.control === "manual" ? "manual" : "auto";
+      const acMode = ["cool", "dry", "fan", "heat"].includes(state.mode) ? state.mode : "cool";
+      const fan = state.fan === "medium" ? "med" : (["auto", "low", "med", "high"].includes(state.fan) ? state.fan : "auto");
+
+      const payload = {
+        power: Boolean(state.power),
+        mode,
+        temp: Math.max(16, Math.min(30, Number(state.temp) || 27)),
+        ac_mode: acMode,
+        fan,
+        swing: Boolean(state.swing),
+        quiet: Boolean(state.quiet),
+        turbo: Boolean(state.turbo),
+        sleep: Boolean(state.sleep),
+        sync_power: Boolean(isPowerAction)
+      };
+
+      try {
+        const response = await fetch("/api/ac-command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Permintaan gagal");
+        feedback("Perintah tersimpan di Supabase.");
+        return true;
+      } catch (error) {
+        feedback("Gagal mengirim perintah: " + error.message);
+        return false;
+      }
+    }
+
+    function sendACCommand(isPowerAction = false) {
+      lastManualActionTime = Date.now();
+      commandQueue = commandQueue.catch(() => {}).then(async () => {
+        commandSending = true;
+        try { await sendACCommandNow(isPowerAction); } finally { commandSending = false; }
+      });
+      return commandQueue;
+    }
+
+    async function loadACState() {
+      if (commandSending) return;
+      if (Date.now() - lastManualActionTime < 6000) return;
+
+      try {
+        const response = await fetch("/api/ac-state", { cache: "no-store" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const result = await response.json();
+        const a = result && result.state;
+        if (!a) return;
+
+        if (typeof a.power === "boolean") state.power = a.power;
+        if (Number.isFinite(Number(a.temp)) && a.temp !== null) state.temp = Number(a.temp);
+
+        if (a.est_kwh_bulan_ini !== undefined) state.estKwh = Number(a.est_kwh_bulan_ini) || 0;
+        if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;
+
+        if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) state.mode = a.ac_mode;
+        if (["auto", "low", "med", "medium", "high"].includes(a.fan)) state.fan = a.fan === "medium" ? "med" : a.fan;
+
+        for (const key of ["quiet", "turbo", "sleep", "swing"]) {
+          if (typeof a[key] === "boolean") state[key] = a[key];
+        }
+
+        if (a.mode === "manual") state.control = "manual";
+        else if (a.mode === "auto" || a.mode === "auto_adaptive") state.control = "auto_adaptive";
+
+        render();
+      } catch (error) {
+        console.error("Gagal baca status:", error);
+      }
+    }
+
+    function render() {
+      $("ac-temp").textContent = state.temp;
+      if ($("ac-est-kwh")) $("ac-est-kwh").textContent = state.estKwh.toFixed(2);
+      if ($("ac-est-biaya")) $("ac-est-biaya").textContent = Math.round(state.estBiaya).toLocaleString("id-ID");
+
+      $("ac-power-label").textContent = state.power ? "Menyala" : "Mati";
+      $("ac-power-text").textContent = state.power ? "Matikan" : "Nyalakan";
+      $("ac-power").setAttribute("aria-pressed", String(state.power));
+      $("ac-power").classList.toggle("is-on", state.power);
+      $("ac-state-badge").textContent = state.power ? "ON" : "OFF";
+      $("ac-state-badge").classList.toggle("is-on", state.power);
+
+      document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("selected", b.dataset.mode === state.mode));
+      
+      const fanDisabled = state.quiet || state.turbo;
+      document.querySelectorAll("[data-fan]").forEach(b => {
+        b.classList.toggle("selected", (b.dataset.fan === "medium" ? "med" : b.dataset.fan) === state.fan);
+        b.style.opacity = fanDisabled ? "0.4" : "1";
+        b.style.pointerEvents = fanDisabled ? "none" : "auto";
+      });
+
+      document.querySelectorAll("[data-feature]").forEach(b => {
+        const key = b.dataset.feature;
+        b.classList.toggle("selected", Boolean(state[key]));
+        b.setAttribute("aria-pressed", String(Boolean(state[key])));
+      });
+
+      $("ac-swing").classList.toggle("selected", state.swing);
+      $("ac-swing").setAttribute("aria-pressed", String(state.swing));
+      $("ac-swing").querySelector("span").textContent = state.swing ? "Swing aktif" : "Swing mati";
+      $("ac-auto").classList.toggle("active", state.control === "auto_adaptive");
+      $("ac-auto").setAttribute("aria-checked", String(state.control === "auto_adaptive"));
+    }
+
+    function compare() {
+      const roomEl = $("temperature");
+      const room = roomEl ? Number(roomEl.textContent) : NaN;
+      const outside = Number($("out-temp").dataset.value);
+      const validRoom = roomEl && roomEl.textContent.trim() !== "--" && Number.isFinite(room);
+      const validOutside = Number.isFinite(outside);
+      $("compare-in").textContent = validRoom ? room.toFixed(1) + " °C" : "-- °C";
+      $("compare-out").textContent = validOutside ? outside.toFixed(1) + " °C" : "-- °C";
+      if (!validRoom || !validOutside) {
+        $("compare-delta").textContent = "--";
+        $("compare-badge").textContent = "Menunggu data";
+        $("compare-note").textContent = "Pastikan sensor kamar online dan data cuaca tersedia.";
+        return;
+      }
+      const delta = room - outside;
+      $("compare-delta").textContent = (delta > 0 ? "+" : "") + delta.toFixed(1) + " °C";
+      $("compare-badge").textContent = Math.abs(delta) < 0.5 ? "Hampir sama" : delta > 0 ? "Kamar lebih panas" : "Luar lebih panas";
+      $("compare-note").textContent = delta > 0 ? "Suhu kamar lebih tinggi daripada suhu luar." : delta < 0 ? "Suhu kamar lebih rendah daripada suhu luar." : "Suhu kamar dan luar hampir sama.";
+    }
+
+    async function loadWeather() {
+      $("weather-indicator").textContent = "Memperbarui...";
+      try {
+        const url = new URL("https://api.open-meteo.com/v1/forecast");
+        url.search = new URLSearchParams({
+          latitude: "-7.5755",
+          longitude: "110.8243",
+          current: "temperature_2m,relative_humidity_2m,weather_code",
+          timezone: "Asia/Jakarta"
+        });
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const data = await response.json();
+        const c = data.current;
+        if (!c || !Number.isFinite(c.temperature_2m) || !Number.isFinite(c.relative_humidity_2m)) throw new Error("Data tidak valid");
+        $("out-temp").textContent = c.temperature_2m.toFixed(1);
+        $("out-temp").dataset.value = String(c.temperature_2m);
+        $("out-hum").textContent = c.relative_humidity_2m;
+        $("out-condition").textContent = "Suhu udara 2 meter";
+        $("weather-indicator").textContent = "● Live";
+        $("weather-time").textContent = "Data cuaca: " +
+          new Date(c.time).toLocaleString("id-ID", {
+            timeZone: "Asia/Jakarta", day: "2-digit", month: "short",
+            hour: "2-digit", minute: "2-digit"
+          }) + " WIB · cek tiap 60 detik";
+        compare();
+      } catch (err) {
+        $("weather-indicator").textContent = "Tidak tersedia";
+        $("out-condition").textContent = "Gagal mengambil data cuaca";
+        $("weather-time").textContent = "Pembaruan gagal. Akan dicoba kembali.";
+        console.error("Open-Meteo:", err);
+      }
+    }
+
+    $("ac-power").addEventListener("click", async () => { state.power = !state.power; render(); await sendACCommand(true); });
+    $("ac-minus").addEventListener("click", async () => { state.temp = Math.max(16, state.temp - 1); render(); await sendACCommand(false); });
+    $("ac-plus").addEventListener("click", async () => { state.temp = Math.min(30, state.temp + 1); render(); await sendACCommand(false); });
+
+    document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => { state.mode = b.dataset.mode; render(); sendACCommand(false); }));
+    document.querySelectorAll("[data-fan]").forEach(b => b.addEventListener("click", async () => {
+      if (state.quiet || state.turbo) return;
+      state.fan = b.dataset.fan === "medium" ? "med" : b.dataset.fan;
+      render();
+      await sendACCommand(false);
+    }));
+
+    document.querySelectorAll("[data-feature]").forEach(b => b.addEventListener("click", async () => {
+      const key = b.dataset.feature;
+      state[key] = !state[key];
+      if (key === "quiet" && state.quiet) state.turbo = false;
+      if (key === "turbo" && state.turbo) state.quiet = false;
+      render();
+      await sendACCommand(false);
+    }));
+
+    $("ac-swing").addEventListener("click", () => { state.swing = !state.swing; render(); sendACCommand(false); });
+    $("ac-auto").addEventListener("click", () => { state.control = state.control === "manual" ? "auto_adaptive" : "manual"; render(); sendACCommand(false); });
+
+    const roomObserver = new MutationObserver(compare);
+    const roomTemp = $("temperature");
+    if (roomTemp) roomObserver.observe(roomTemp, { childList: true, characterData: true, subtree: true });
+
+    render();
+    loadACState();
+    setInterval(loadACState, 5000);
+    loadWeather();
+    setInterval(loadWeather, 60 * 1000);
+    setInterval(compare, 5000);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+  } else init();
+})();
+
+
+==========================================================================================
+FILE: public\app.js
+UKURAN: 11152 bytes
+==========================================================================================
+
+const $ = id => document.getElementById(id);
+
+// ==========================================
+// 1. KONFIGURASI SUPABASE
+// ==========================================
+const SUPABASE_URL =
+  "https://rcgcerurtrnfccrwcuns.supabase.co";
+
+const SUPABASE_KEY =
+  "sb_publishable_jatgzAXihteDe_0_0iCDhg_bJXTNVFX";
+
+const TABLE_URL =
+  `${SUPABASE_URL}/rest/v1/sensor_readings`;
+
+const OFFLINE_AFTER_MS = 75000;
+const REFRESH_LATEST_MS = 5000;
+const REFRESH_HISTORY_MS = 60000;
+const PAGE_SIZE = 1000;
+
+let requestInProgress = false;
+let historyInProgress = false;
+let lastHistoryRefresh = 0;
+let historyRecords = [];
+
+// ==========================================
+// 2. FORMAT WAKTU INDONESIA
+// ==========================================
+const jakartaFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Jakarta",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit"
+});
+
+function jakartaDateString(date = new Date()) {
+  const parts = jakartaFormatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") values[part.type] = part.value;
+  }
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function jakartaHour(date) {
+  return Number(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).format(date));
+}
+
+function normalizeRecord(item) {
+  if (!item) return null;
+
+  const suhu = Number(item.suhu);
+  const kelembapan = Number(item.kelembapan);
+  const date = new Date(item.recorded_at);
+
+  if (
+    !Number.isFinite(suhu) ||
+    !Number.isFinite(kelembapan) ||
+    Number.isNaN(date.getTime())
+  ) {
+    return null;
+  }
+
+  return { suhu, kelembapan, date };
+}
+
+function formatClock(date) {
+  return date.toLocaleTimeString("id-ID", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+// ==========================================
+// 3. REQUEST SUPABASE
+// ==========================================
+async function supabaseFetch(url, range) {
+  const headers = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`
+  };
+
+  if (range) headers.Range = range;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers,
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Supabase HTTP ${response.status}: ${detail}`);
+  }
+
+  return response.json();
+}
+
+// ==========================================
+// 4. AMBIL DATA TERBARU
+// ==========================================
+async function fetchLatest() {
+  const query = new URLSearchParams({
+    select: "suhu,kelembapan,recorded_at",
+    order: "recorded_at.desc",
+    limit: "1"
+  });
+
+  const rows = await supabaseFetch(
+    `${TABLE_URL}?${query.toString()}`
+  );
+
+  return rows.length ? normalizeRecord(rows[0]) : null;
+}
+
+// ==========================================
+// 5. AMBIL SELURUH RIWAYAT HARI INI
+//    PAGINASI UNTUK MENGATASI BATAS ROW API
+// ==========================================
+async function fetchTodayHistory() {
+  const today = jakartaDateString();
+  const start = `${today}T00:00:00+07:00`;
+
+  const tomorrowDate = new Date(
+    new Date(start).getTime() + 24 * 60 * 60 * 1000
+  );
+
+  const tomorrow = jakartaDateString(tomorrowDate);
+  const end = `${tomorrow}T00:00:00+07:00`;
+  const allRows = [];
+  let offset = 0;
+
+  while (true) {
+    const query = new URLSearchParams({
+      select: "suhu,kelembapan,recorded_at",
+      and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
+      order: "recorded_at.asc",
+      limit: String(PAGE_SIZE),
+      offset: String(offset)
+    });
+
+    const rows = await supabaseFetch(
+      `${TABLE_URL}?${query.toString()}`
+    );
+
+    allRows.push(...rows);
+
+    if (rows.length < PAGE_SIZE) break;
+    offset += rows.length;
+  }
+
+  return allRows.map(normalizeRecord).filter(Boolean);
+}
+
+// ==========================================
+// 6. STATUS ESP32
+// ==========================================
+function setStatus(online, message) {
+  const statusText = $("statusText");
+  const dot = $("statusDot");
+
+  if (statusText) statusText.textContent = message;
+
+  if (dot) {
+    dot.className = "dot " + (online ? "online" : "offline");
+  }
+}
+
+function showOffline(reason) {
+  setStatus(false, "ESP32 Offline");
+
+  // Jangan tampilkan data lama sebagai data terkini.
+  $("temperature").textContent = "--";
+  $("humidity").textContent = "--";
+  $("temperatureStatus").textContent = reason;
+  $("lastUpdate").textContent = "Tidak ada data terkini";
+
+  // Analisis historis sengaja tidak dihapus.
+}
+
+// ==========================================
+// 7. KATEGORI SUHU
+// ==========================================
+function describeTemperature(temp) {
+  if (temp >= 32) return "Panas banget";
+  if (temp >= 29) return "Panas";
+  if (temp >= 26) return "Cenderung hangat";
+  if (temp >= 23) return "Relatif sejuk";
+  return "Sejuk";
+}
+
+// ==========================================
+// 8. ANALISIS SUHU PER JAM
+function analyzeByHour(records) {
+  const today = jakartaDateString();
+  const now = new Date();
+  const currentHour = jakartaHour(now);
+  const elapsedSeconds = now.getMinutes() * 60 + now.getSeconds();
+
+  // ESP32 direncanakan mengirim data setiap 30 detik.
+  const TARGET_PER_HOUR = 120;
+  const MIN_SAMPLES = 60;
+  const MIN_COVERAGE = 0.75;
+
+  const groups = new Map();
+
+  for (const record of records) {
+    if (!record || !record.date || !Number.isFinite(record.suhu)) continue;
+    if (jakartaDateString(record.date) !== today) continue;
+
+    const hour = jakartaHour(record.date);
+    if (!groups.has(hour)) groups.set(hour, []);
+    groups.get(hour).push(record);
+  }
+
+  const hourly = [];
+
+  for (const [hour, values] of groups.entries()) {
+    // Jam lampau memakai target satu jam penuh.
+    // Jam berjalan memakai target sesuai durasi yang telah berlalu.
+    const expected = hour === currentHour
+      ? Math.min(TARGET_PER_HOUR, Math.ceil(elapsedSeconds / 30))
+      : TARGET_PER_HOUR;
+
+    const temps = values.map(item => item.suhu);
+    const count = temps.length;
+    const coverage = expected > 0 ? Math.min(1, count / expected) : 0;
+
+    if (count < MIN_SAMPLES || coverage < MIN_COVERAGE) continue;
+
+    hourly.push({
+      hour,
+      average: temps.reduce((sum, value) => sum + value, 0) / count,
+      min: Math.min(...temps),
+      max: Math.max(...temps),
+      count,
+      expected,
+      coverage
+    });
+  }
+
+  hourly.sort((a, b) => a.hour - b.hour);
+
+  const hotHour = $("hotHour");
+  const coolHour = $("coolHour");
+  const hotDetail = $("hotDetail");
+  const coolDetail = $("coolDetail");
+  const insight = $("insightText");
+
+  if (!hotHour || !coolHour || !hotDetail || !coolDetail || !insight) {
+    console.error("Elemen analisis suhu tidak ditemukan di HTML.");
+    return;
+  }
+
+  const range = hour =>
+    `${String(hour).padStart(2, "0")}.00–${String((hour + 1) % 24).padStart(2, "0")}.00`;
+
+  function showResult(element, detail, item) {
+    element.textContent = range(item.hour);
+    detail.textContent =
+      `Rata-rata ${item.average.toFixed(1)} °C; rentang ` +
+      `${item.min.toFixed(1)}–${item.max.toFixed(1)} °C; ` +
+      `${item.count}/${item.expected} sampel (${(item.coverage * 100).toFixed(0)}%); ` +
+      `${item.count} pengukuran valid.`;
+  }
+
+  if (hourly.length < 2) {
+    hotHour.textContent = "Belum cukup data";
+    coolHour.textContent = "Belum cukup data";
+    hotDetail.textContent =
+      "Setiap jam harus memiliki minimal 60 sampel valid dan kelengkapan 75%.";
+    coolDetail.textContent =
+      "Diperlukan setidaknya dua jam yang memenuhi kriteria tersebut.";
+    insight.textContent =
+      `Baru ${hourly.length} jam memenuhi syarat. ` +
+      "Analisis akan diperbarui ketika data mencukupi.";
+    return;
+  }
+
+  const highest = Math.max(...hourly.map(item => item.average));
+  const lowest = Math.min(...hourly.map(item => item.average));
+  const hottest = hourly.filter(item => Math.abs(item.average - highest) < 1e-9);
+  const coolest = hourly.filter(item => Math.abs(item.average - lowest) < 1e-9);
+
+  showResult(hotHour, hotDetail, hottest[0]);
+  showResult(coolHour, coolDetail, coolest[0]);
+
+  if (Math.abs(highest - lowest) < 1e-9) {
+    insight.textContent =
+      "Rata-rata suhu semua jam yang memenuhi syarat sama.";
+  } else {
+    insight.textContent =
+      `Selisih rata-rata jam terpanas dan tersejuk ${(highest - lowest).toFixed(1)} °C. ` +
+      `${hourly.length} jam memenuhi kriteria minimal 60 sampel dan kelengkapan 75%.`;
+  }
+}
+
+// ==========================================
+// // 9. TAMPILKAN DATA TERBARU
+// ==========================================
+function showOnline(latest) {
+  setStatus(true, "ESP32 Terhubung");
+
+  $("temperature").textContent = latest.suhu.toFixed(1);
+  $("humidity").textContent = latest.kelembapan.toFixed(1);
+
+  $("temperatureStatus").textContent =
+    describeTemperature(latest.suhu);
+
+  $("lastUpdate").textContent =
+    "Data diterima " + formatClock(latest.date);
+
+  const analysisDate = $("analysisDate");
+
+  if (analysisDate) {
+    analysisDate.textContent = latest.date.toLocaleDateString(
+      "id-ID",
+      {
+        timeZone: "Asia/Jakarta",
+        day: "numeric",
+        month: "short",
+        year: "numeric"
+      }
+    );
+  }
+}
+
+// ==========================================
+// 10. REFRESH DATA TERBARU
+// ==========================================
+async function refreshLatest() {
+  if (requestInProgress) return;
+  requestInProgress = true;
+
+  try {
+    const latest = await fetchLatest();
+
+    if (!latest) {
+      showOffline("Belum ada data valid dari ESP32.");
+      return;
+    }
+
+    const age = Date.now() - latest.date.getTime();
+
+    if (age < -5000 || age > OFFLINE_AFTER_MS) {
+      showOffline("ESP32 tidak mengirim data terbaru.");
+      return;
+    }
+
+    showOnline(latest);
+  } catch (error) {
+    showOffline("Gagal mengambil data dari Supabase.");
+    console.error("Kesalahan data terbaru:", error);
+  } finally {
+    requestInProgress = false;
+  }
+}
+
+// ==========================================
+// 11. REFRESH RIWAYAT DAN ANALISIS
+// ==========================================
+async function refreshHistory() {
+  if (historyInProgress) return;
+  historyInProgress = true;
+
+  try {
+    historyRecords = await fetchTodayHistory();
+    lastHistoryRefresh = Date.now();
+
+    analyzeByHour(historyRecords);
+
+    console.log(
+      `Riwayat hari ini: ${historyRecords.length} pengukuran`
+    );
+  } catch (error) {
+    console.error("Gagal mengambil riwayat:", error);
+  } finally {
+    historyInProgress = false;
+  }
+}
+
+// ==========================================
+// 12. JALANKAN DASHBOARD
+// ==========================================
+if (
+  SUPABASE_KEY === "TEMPEL_PUBLISHABLE_KEY_DI_SINI" ||
+  !SUPABASE_KEY.trim()
+) {
+  setStatus(false, "Konfigurasi Supabase belum lengkap");
+  console.error("Isi SUPABASE_KEY dengan publishable key.");
+} else {
+  refreshLatest();
+  refreshHistory();
+
+  setInterval(refreshLatest, REFRESH_LATEST_MS);
+
+  setInterval(() => {
+    if (Date.now() - lastHistoryRefresh >= REFRESH_HISTORY_MS) {
+      refreshHistory();
+    }
+  }, 5000);
+}
+
+
+==========================================================================================
+FILE: public\index.html
+UKURAN: 1955 bytes
+==========================================================================================
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f4">
+  <title>Monitoring Suhu Kamar</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <div>
+        <p class="eyebrow">MONITORING RUANGAN</p>
+        <h1>Kondisi Kamar</h1>
+        <p class="subtitle">Pemantauan suhu dan kelembapan secara langsung.</p>
+      </div>
+      <div class="status">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Menghubungkan sensor...</span>
+      </div>
+    </header>
+
+    <section class="room-info">
+      <div>
+        <span class="room-label">Luas ruangan</span>
+        <strong>15 m&#178;</strong>
+      </div>
+      <span class="room-size">5 m &#215; 3 m</span>
+    </section>
+
+    <section class="readings">
+      <article class="reading-card">
+        <div class="card-heading">
+          <span>Suhu ruangan</span>
+          <span class="symbol">&#176;C</span>
+        </div>
+        <div class="value-line">
+          <strong id="temperature">--.-</strong>
+          <span>&#176;C</span>
+        </div>
+        <p id="temperatureStatus" class="reading-note">Menunggu data sensor</p>
+      </article>
+
+      <article class="reading-card">
+        <div class="card-heading">
+          <span>Kelembapan udara</span>
+          <span class="symbol">RH</span>
+        </div>
+        <div class="value-line">
+          <strong id="humidity">--</strong>
+          <span>%</span>
+        </div>
+        <p class="reading-note">Kelembapan relatif udara</p>
+      </article>
+    </section>
+
+    <footer>
+      <span>Sensor ESP32-S3 + DHT22</span>
+      <span id="lastUpdate">Belum menerima data</span>
+    </footer>
+  </main>
+  <script src="/ac-weather-control.js" defer></script>
+</body>
+</html>
+
+
+==========================================================================================
+FILE: public\style.css
+UKURAN: 13013 bytes
+==========================================================================================
+:root {
+  --bg: #f4f6f3;
+  --surface: #ffffff;
+  --text: #252a25;
+  --muted: #7c837a;
+  --line: #e7eae4;
+  --green: #416b4b;
+  --green-bg: #eef4ed;
+  --orange: #a85d3d;
+  --orange-bg: #fbf0e9;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.container {
+  width: min(760px, calc(100% - 32px));
+  margin: 42px auto 28px;
+}
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+.eyebrow {
+  margin: 0 0 7px;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.7px;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(26px, 5vw, 34px);
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -1px;
+}
+.subtitle {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 30px;
+  background: white;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c49a50;
+}
+.dot.online { background: #4b9660; }
+.dot.offline { background: #c65b51; }
+.room-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 18px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  margin-bottom: 14px;
+}
+.room-info > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.room-label, .room-size {
+  color: var(--muted);
+  font-size: 12px;
+}
+.room-info strong {
+  font-size: 16px;
+  font-weight: 650;
+}
+.readings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.reading-card {
+  min-height: 170px;
+  padding: 21px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.card-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.symbol {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 8px;
+  background: var(--green-bg);
+  color: var(--green);
+  font-size: 12px;
+}
+.value-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 16px;
+}
+.value-line strong {
+  font-size: clamp(38px, 7vw, 48px);
+  font-weight: 600;
+  letter-spacing: -1.8px;
+  line-height: 1.1;
+}
+.value-line > span {
+  color: var(--muted);
+  font-size: 17px;
+}
+.reading-note {
+  margin: 11px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.analysis {
+  margin-top: 20px;
+  padding: 23px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.analysis-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 19px;
+}
+.analysis-heading .eyebrow { margin-bottom: 4px; }
+h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -.4px;
+}
+.date-label {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.analysis-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 15px;
+  border-radius: 10px;
+  margin-top: 10px;
+}
+.analysis-item.hot { background: var(--orange-bg); }
+.analysis-item.cool { background: var(--green-bg); }
+.analysis-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: white;
+  font-size: 19px;
+  font-weight: 600;
+}
+.hot .analysis-icon { color: var(--orange); }
+.cool .analysis-icon { color: var(--green); }
+.analysis-content { min-width: 0; }
+.analysis-label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.analysis-content strong {
+  display: block;
+  font-size: 19px;
+  font-weight: 650;
+}
+.analysis-content p {
+  margin: 3px 0 0;
+  color: #6f756d;
+  font-size: 12px;
+}
+.insight {
+  margin-top: 17px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.insight strong { font-size: 13px; }
+.insight p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.method {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 19px;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+@media (max-width: 560px) {
+  .container { width: calc(100% - 24px); margin-top: 24px; }
+  .header { flex-direction: column; }
+  .readings { grid-template-columns: 1fr; gap: 10px; }
+  .reading-card { min-height: 145px; padding: 18px; }
+  .value-line { margin-top: 11px; }
+  .analysis { padding: 17px 13px; }
+  .analysis-heading { align-items: flex-start; }
+  footer { flex-direction: column; gap: 4px; }
+}
+
+/* ===== Smart AC dashboard refresh ===== */
+#smart-ac { margin-top: 28px; }
+.smart-dashboard { color: var(--text); }
+.smart-head, .weather-heading, .comparison-title {
+  display:flex; align-items:center; justify-content:space-between; gap:14px;
+  margin:0 0 15px;
+}
+.smart-head h2, .weather-heading h2 { font-size:24px; letter-spacing:-.6px; }
+.smart-sub { margin:5px 0 0; color:var(--muted); font-size:12px; }
+.ac-badge, .compare-badge {
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius:999px; padding:6px 12px; background:#f0f1f4;
+  color:#606675; font-size:11px; font-weight:750;
+}
+.ac-badge.is-on { background:#e0f5e9; color:#18794e; }
+.ac-main-card, .ac-automation, .weather-card, .comparison-card {
+  background:var(--surface); border:1px solid var(--line); border-radius:20px;
+  box-shadow:0 8px 30px rgba(25,35,50,.035);
+}
+.ac-main-card { padding:22px; }
+.ac-power-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.muted-label { display:block; color:var(--muted); font-size:12px; }
+.ac-power-label { font-size:19px; font-weight:750; margin-top:2px; }
+.power-button {
+  display:flex; align-items:center; gap:8px; border:0; border-radius:999px;
+  background:#202d40; color:white; padding:11px 16px; font:inherit;
+  font-size:12px; font-weight:700; cursor:pointer; transition:.18s;
+}
+.power-button.is-on { background:#167d56; }
+.power-symbol { font-size:20px; line-height:1; }
+.ac-temp-control {
+  display:flex; justify-content:center; align-items:center; gap:28px;
+  padding:27px 0 24px;
+}
+.round-button {
+  width:48px; height:48px; border:1px solid var(--line); border-radius:50%;
+  background:#f7f8fa; color:var(--text); font-size:26px; cursor:pointer;
+}
+.round-button:hover, .choice-button:hover, .mini-choice:hover { border-color:#8ea5cf; }
+.setpoint { text-align:center; min-width:115px; }
+.setpoint div { display:flex; align-items:flex-start; justify-content:center; gap:3px; }
+.setpoint strong { font-size:62px; line-height:1; letter-spacing:-3px; font-weight:650; }
+.setpoint div span { font-size:19px; color:var(--muted); }
+.setpoint small { color:var(--muted); font-size:12px; }
+.ac-control-label { color:var(--muted); font-size:12px; font-weight:650; margin-bottom:9px; }
+.ac-button-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
+.choice-button {
+  min-height:72px; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:6px; border:1px solid var(--line); border-radius:13px;
+  background:white; color:var(--text); font:inherit; font-size:12px; cursor:pointer;
+}
+.choice-button span { font-size:21px; }
+.choice-button.selected, .mini-choice.selected {
+  border-color:#93b8ef; background:#edf4ff; color:#245cb5;
+}
+.ac-options { display:grid; grid-template-columns:1fr; gap:16px; margin-top:20px; }
+.fan-options { display:flex; flex-wrap:wrap; gap:7px; }
+.mini-choice { border:1px solid var(--line); background:white; color:var(--text);
+  border-radius:999px; padding:8px 12px; font:inherit; font-size:11px; cursor:pointer; }
+.swing-button { display:flex; justify-content:center; align-items:center; gap:8px;
+  border:1px solid var(--line); background:white; border-radius:12px; padding:11px;
+  font:inherit; font-size:12px; cursor:pointer; }
+.swing-button.selected { background:#edf4ff; color:#245cb5; border-color:#c8daf8; }
+.ac-automation { display:flex; align-items:center; justify-content:space-between; gap:15px;
+  padding:19px 21px; margin-top:12px; }
+.ac-automation h3, .comparison-title h3 { margin:0; font-size:17px; }
+.toggle-button { flex:0 0 52px; width:52px; height:30px; padding:3px;
+  border:0; border-radius:99px; background:#d9dde5; cursor:pointer; transition:.2s; }
+.toggle-button span { display:block; width:24px; height:24px; background:white;
+  border-radius:50%; box-shadow:0 1px 4px #0002; transition:.2s; }
+.toggle-button.active { background:#2778db; }
+.toggle-button.active span { transform:translateX(22px); }
+.ac-feedback { margin:10px 2px 25px; color:var(--muted); font-size:11px; line-height:1.6; }
+.weather-heading { margin-top:26px; }
+.weather-indicator { color:#218557; font-size:11px; font-weight:700; white-space:nowrap; }
+.weather-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.weather-card { position:relative; padding:19px; overflow:hidden; }
+.weather-card.outdoor { background:linear-gradient(140deg,#fff8e9,#fff); }
+.weather-icon { display:block; font-size:23px; margin-bottom:12px; }
+.weather-value { display:flex; align-items:baseline; gap:5px; margin-top:8px; }
+.weather-value strong { font-size:clamp(30px,6vw,40px); letter-spacing:-1.5px; }
+.weather-value span { color:var(--muted); }
+.weather-card p { margin:5px 0 0; color:var(--muted); font-size:11px; }
+.comparison-card { padding:20px; margin-top:12px; }
+.compare-values { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:17px 0; }
+.compare-values > div { background:#f7f8fa; border-radius:12px; padding:13px; min-width:0; }
+.compare-values span { display:block; color:var(--muted); font-size:11px; }
+.compare-values strong { display:block; margin-top:5px; font-size:24px; letter-spacing:-.5px; }
+.delta-line { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  border-top:1px solid var(--line); padding-top:14px; font-size:12px; }
+.delta-line strong { font-size:17px; }
+.weather-time { margin:14px 0 0; color:var(--muted); font-size:10px; }
+@media(max-width:560px) {
+  #smart-ac { margin-top:22px; }
+  .ac-main-card { padding:17px; border-radius:17px; }
+  .ac-temp-control { gap:16px; }
+  .round-button { width:43px; height:43px; }
+  .setpoint strong { font-size:55px; }
+  .ac-button-grid { gap:6px; }
+  .choice-button { min-height:66px; font-size:11px; }
+  .weather-grid { gap:8px; }
+  .weather-card { padding:14px; }
+  .comparison-card { padding:15px; }
+  .compare-values { gap:8px; }
+  .compare-values > div { padding:10px; }
+  .compare-values strong { font-size:21px; }
+}
+
+
+/* UI POLISH - visual only */
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.container {
+  width: min(820px, calc(100% - 32px));
+}
+
+.room-info,
+.reading-card,
+.analysis {
+  box-shadow: 0 3px 14px rgba(30, 45, 30, .035);
+}
+
+.room-info,
+.reading-card,
+.analysis {
+  border-radius: 15px;
+}
+
+.reading-card {
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.reading-card:hover {
+  border-color: #d3dfd1;
+  box-shadow: 0 6px 20px rgba(30, 45, 30, .05);
+}
+
+.value-line strong,
+.analysis-content strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-item {
+  padding: 17px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.analysis-item.hot {
+  border-color: #f5e3d8;
+}
+
+.analysis-item.cool {
+  border-color: #dfece0;
+}
+
+.date-label {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafbf9;
+}
+
+button:focus-visible {
+  outline: 2px solid #6d9674;
+  outline-offset: 3px;
+}
+
+@media (max-width: 560px) {
+  .container {
+    width: calc(100% - 24px);
+    margin-top: 22px;
+  }
+
+  .room-info {
+    gap: 8px;
+    padding: 13px 14px;
+  }
+
+  .room-info > div {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+  }
+
+  .room-size {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .readings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .reading-card {
+    min-width: 0;
+    min-height: 154px;
+    padding: 14px 12px;
+  }
+
+  .card-heading {
+    gap: 5px;
+    font-size: 11px;
+  }
+
+  .value-line {
+    gap: 3px;
+  }
+
+  .value-line strong {
+    font-size: clamp(27px, 8vw, 38px);
+    letter-spacing: -1.3px;
+  }
+
+  .value-line > span {
+    font-size: 13px;
+  }
+
+  .reading-note {
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .analysis {
+    padding: 17px 13px;
+  }
+
+  .analysis-item {
+    gap: 10px;
+    padding: 12px 10px;
+  }
+
+  .analysis-content strong {
+    font-size: 16px;
+  }
+
+  .analysis-content p {
+    font-size: 11px;
+    line-height: 1.65;
+  }
+}
+
+@media (max-width: 360px) {
+  .readings {
+    grid-template-columns: 1fr;
+  }
+
+  .reading-card {
+    min-height: 140px;
+    padding: 17px;
+  }
+
+  .value-line strong {
+    font-size: 40px;
+  }
+
+  .analysis-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+
+==========================================================================================
+FILE: server.js
+UKURAN: 2141 bytes
+==========================================================================================
+require("dotenv").config({ path: ".env.local" });
+const express = require("express");
+const os = require("os");
+const app = express();
+const PORT = 3000;
+
+app.use(express.json({ limit: "10kb" }));
+app.use(express.static("public"));
+
+let latest = null;
+let history = [];
+let lastReceived = 0;
+
+app.get("/api/data", (req, res) => {
+  res.json({
+    connected: !!latest && Date.now() - lastReceived < 15000,
+    latest,
+    history
+  });
+});
+
+app.post("/api/data", (req, res) => {
+  const { suhu, kelembapan } = req.body;
+
+  if (
+    typeof suhu !== "number" ||
+    typeof kelembapan !== "number" ||
+    !Number.isFinite(suhu) ||
+    !Number.isFinite(kelembapan) ||
+    suhu < -40 || suhu > 80 ||
+    kelembapan < 0 || kelembapan > 100
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Data sensor tidak valid"
+    });
+  }
+
+  latest = {
+    suhu,
+    kelembapan,
+    waktu: new Date().toISOString()
+  };
+
+  lastReceived = Date.now();
+  history.push(latest);
+
+  if (history.length > 500) {
+    history.shift();
+  }
+
+  res.json({ success: true });
+});
+
+app.get("/api/status", (req, res) => {
+  res.json({
+    connected: !!latest && Date.now() - lastReceived < 15000,
+    waktuServer: new Date().toISOString()
+  });
+});
+
+
+app.get("/api/ac-state", require("./api/ac-state"));
+app.post("/api/ac-command", async (req, res) => {
+  try {
+    await require("./api/ac-command")(req, res);
+  } catch (error) {
+    console.error("AC command route error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Kesalahan server AC" });
+    }
+  }
+});
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("\n==================================");
+  console.log("  WEB MONITORING DHT22 AKTIF");
+  console.log("==================================");
+  console.log(`Lokal: http://localhost:${PORT}`);
+
+  const nets = os.networkInterfaces();
+  for (const list of Object.values(nets)) {
+    for (const net of list || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        console.log(`Jaringan: http://${net.address}:${PORT}`);
+      }
+    }
+  }
+
+  console.log("\nMenunggu data dari ESP32-S3...");
+});
+
+
+
+
+==========================================================================================
+FILE: update-web.js
+UKURAN: 2449 bytes
+==========================================================================================
+const fs = require("fs"); const file = "public/ac-weather-control.js"; let code = fs.readFileSync(file, "utf8"); if (!code.includes("ac-sisa-harian")) { code = code.replace("<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Energi Bulan Ini</span>\n            <div style=\"font-size:18px;font-weight:700\"><span id=\"ac-est-kwh\">0.00</span> kWh</div>\n          </div>", "<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Energi Bulan Ini</span>\n            <div style=\"font-size:18px;font-weight:700\"><span id=\"ac-est-kwh\">0.00</span> kWh</div>\n            <div style=\"font-size:11px;color:#555;margin-top:2px\">Sisa Bulan: <strong id=\"ac-sisa-bulan\">0.00</strong> kWh</div>\n          </div>"); code = code.replace("<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Biaya / Anggaran</span>\n            <div style=\"font-size:16px;font-weight:700;color:#1b5e20\">Rp <span id=\"ac-est-biaya\">0</span> / Rp 100k</div>\n          </div>", "<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Biaya / Anggaran</span>\n            <div style=\"font-size:16px;font-weight:700;color:#1b5e20\">Rp <span id=\"ac-est-biaya\">0</span> / Rp 50k</div>\n            <div style=\"font-size:11px;color:#1b5e20;margin-top:2px\">Sisa Hari Ini: <strong id=\"ac-sisa-harian\">0.00</strong> kWh</div>\n          </div>"); code = code.replace("if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;", "if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;\n        if (a.sisa_kwh_bulanan !== undefined) state.sisaBulan = Number(a.sisa_kwh_bulanan) || 0;\n        if (a.sisa_kwh_harian !== undefined) state.sisaHarian = Number(a.sisa_kwh_harian) || 0;"); code = code.replace("if ($(\"ac-est-biaya\")) $(\"ac-est-biaya\").textContent = Math.round(state.estBiaya).toLocaleString(\"id-ID\");", "if ($(\"ac-est-biaya\")) $(\"ac-est-biaya\").textContent = Math.round(state.estBiaya).toLocaleString(\"id-ID\");\n      if ($(\"ac-sisa-bulan\")) $(\"ac-sisa-bulan\").textContent = (state.sisaBulan || 0).toFixed(2);\n      if ($(\"ac-sisa-harian\")) $(\"ac-sisa-harian\").textContent = (state.sisaHarian || 0).toFixed(2);"); fs.writeFileSync(file, code, "utf8"); console.log("SUKSES: File berhasil diperbarui!"); } else { console.log("INFO: Elemen sudah ada."); }
+
