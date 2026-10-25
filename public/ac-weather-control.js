@@ -5,7 +5,7 @@
   let commandSending = false;
   let lastManualActionTime = 0;
   const state = {
-    power: false, mode: "cool", temp: 24, acTempCommand: null,
+    power: false, mode: "cool", temp: 24,
     fan: "auto", swing: true, quiet: false, turbo: false,
     sleep: false, control: "manual",
     estKwh: 0, estBiaya: 0, budget: 100000
@@ -45,12 +45,6 @@
             <small>Suhu target</small>
           </div>
           <button id="ac-plus" class="round-button" aria-label="Tambah suhu" type="button">+</button>
-        </div>
-
-        <div class="ac-command-temperature" style="display:flex;flex-direction:column;gap:5px;margin:0 16px 16px;padding:12px 14px;border:1px solid var(--border-color,#dedede);border-radius:12px">
-          <span class="muted-label">Suhu perintah AC</span>
-          <strong id="ac-temp-command" style="font-size:24px;font-weight:600">Belum tersedia</strong>
-          <small id="ac-temp-command-note" style="font-size:12px;opacity:.75">Menunggu laporan terbaru dari ESP32</small>
         </div>
 
         <div class="ac-energy-card" style="margin:0 16px 16px;padding:12px 14px;border:1px solid #d3e3fd;background:#f0f4f9;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
@@ -103,7 +97,6 @@
       </div>
       <p id="ac-feedback" class="ac-feedback" role="status">Tampilan siap.</p>
 
-      <!-- WIDGET OPEN-METEO & PERBANDINGAN -->
       <div class="weather-heading">
         <div>
           <p class="eyebrow">OPEN-METEO · SURAKARTA</p>
@@ -199,15 +192,10 @@
         if (!response.ok) throw new Error("HTTP " + response.status);
         const result = await response.json();
         const a = result && result.state;
-        const deviceOnline = Boolean(result && result.device && result.device.online);
         if (!a) return;
 
         if (typeof a.power === "boolean") state.power = a.power;
         if (Number.isFinite(Number(a.temp)) && a.temp !== null) state.temp = Number(a.temp);
-
-        if (a.ac_temp_command !== null && a.ac_temp_command !== undefined) {
-          state.acTempCommand = Number(a.ac_temp_command);
-        } else state.acTempCommand = null;
 
         if (a.est_kwh_bulan_ini !== undefined) state.estKwh = Number(a.est_kwh_bulan_ini) || 0;
         if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;
@@ -232,22 +220,6 @@
       $("ac-temp").textContent = state.temp;
       if ($("ac-est-kwh")) $("ac-est-kwh").textContent = state.estKwh.toFixed(2);
       if ($("ac-est-biaya")) $("ac-est-biaya").textContent = Math.round(state.estBiaya).toLocaleString("id-ID");
-
-      const commandEl = $("ac-temp-command");
-      const commandNoteEl = $("ac-temp-command-note");
-      if (commandEl && commandNoteEl) {
-        if (state.acTempCommand === null) {
-          commandEl.textContent = "Belum tersedia";
-          commandNoteEl.textContent = "Menunggu laporan terbaru dari ESP32";
-        } else {
-          commandEl.textContent = state.acTempCommand + " °C";
-          commandNoteEl.textContent = state.acTempCommand < state.temp
-            ? "Pendinginan dipercepat oleh kontrol adaptif"
-            : state.acTempCommand > state.temp
-              ? "Suhu perintah berbeda dari target pengguna"
-              : "Suhu perintah sama dengan target pengguna";
-        }
-      }
 
       $("ac-power-label").textContent = state.power ? "Menyala" : "Mati";
       $("ac-power-text").textContent = state.power ? "Matikan" : "Nyalakan";
