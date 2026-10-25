@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id);
   let commandQueue = Promise.resolve();
   let commandSending = false;
+  let lastManualActionTime = 0; // Mencegah server menimpa state lokal sesaat setelah diklik
   const state = {
     power: false, mode: "cool", temp: 24, acTempCommand: null,
     fan: "auto", swing: true, quiet: false, turbo: false,
@@ -52,7 +53,6 @@
           <small id="ac-temp-command-note" style="font-size:12px;opacity:.75">Menunggu laporan terbaru dari ESP32</small>
         </div>
 
-        <!-- WIDGET ANGGARAN & kWh BULANAN -->
         <div class="ac-energy-card" style="margin:0 16px 16px;padding:12px 14px;border:1px solid #d3e3fd;background:#f0f4f9;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
           <div>
             <span class="muted-label" style="font-size:11px">Estimasi Energi Bulan Ini</span>
@@ -101,46 +101,7 @@
           <span></span>
         </button>
       </div>
-      <p id="ac-feedback" class="ac-feedback" role="status">
-        Tampilan siap.
-      </p>
-
-      <div class="weather-heading">
-        <div>
-          <p class="eyebrow">OPEN-METEO · SURAKARTA</p>
-          <h2>Cuaca di luar</h2>
-        </div>
-        <span id="weather-indicator" class="weather-indicator">Memuat...</span>
-      </div>
-
-      <div class="weather-grid">
-        <article class="weather-card outdoor">
-          <span class="weather-icon">☀</span>
-          <span class="muted-label">Suhu luar</span>
-          <div class="weather-value"><strong id="out-temp">--</strong><span>°C</span></div>
-          <p id="out-condition">Mengambil data cuaca</p>
-        </article>
-        <article class="weather-card">
-          <span class="weather-icon">◌</span>
-          <span class="muted-label">Kelembapan luar</span>
-          <div class="weather-value"><strong id="out-hum">--</strong><span>%</span></div>
-          <p>Kelembapan relatif</p>
-        </article>
-      </div>
-
-      <div class="comparison-card">
-        <div class="comparison-title">
-          <div><p class="eyebrow">PERBANDINGAN</p><h3>Kamar vs luar</h3></div>
-          <span id="compare-badge" class="compare-badge">Menunggu data</span>
-        </div>
-        <div class="compare-values">
-          <div><span>Kamar · DHT22</span><strong id="compare-in">-- °C</strong></div>
-          <div><span>Luar · Open-Meteo</span><strong id="compare-out">-- °C</strong></div>
-        </div>
-        <div class="delta-line"><span>Selisih suhu</span><strong id="compare-delta">--</strong></div>
-        <p id="compare-note" class="smart-sub">Perbandingan muncul saat kedua sumber memiliki data valid.</p>
-        <p id="weather-time" class="weather-time">Pembaruan: menunggu data</p>
-      </div>
+      <p id="ac-feedback" class="ac-feedback" role="status">Tampilan siap.</p>
     `;
     main.appendChild(panel);
 
@@ -182,6 +143,7 @@
     }
 
     function sendACCommand() {
+      lastManualActionTime = Date.now(); // Tandai waktu aksi manual
       commandQueue = commandQueue.catch(() => {}).then(async () => {
         commandSending = true;
         try { await sendACCommandNow(); } finally { commandSending = false; }
@@ -191,6 +153,9 @@
 
     async function loadACState() {
       if (commandSending) return;
+      // Jangan timpa state lokal jika baru saja ada klik manual dalam 6 detik terakhir
+      if (Date.now() - lastManualActionTime < 6000) return;
+
       try {
         const response = await fetch("/api/ac-state", { cache: "no-store" });
         if (!response.ok) throw new Error("HTTP " + response.status);
@@ -220,9 +185,8 @@
         else if (a.mode === "auto" || a.mode === "auto_adaptive") state.control = "auto_adaptive";
 
         render();
-        feedback(deviceOnline ? "ESP32 ONLINE — status dibaca dari Supabase." : "ESP32 OFFLINE — data terakhir mungkin sudah lama.");
       } catch (error) {
-        feedback("Status AC gagal dibaca: " + error.message);
+        console.error("Gagal baca status:", error);
       }
     }
 
@@ -256,7 +220,6 @@
 
       document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("selected", b.dataset.mode === state.mode));
       
-      // Kipas & Feature Interlock Logic
       const fanDisabled = state.quiet || state.turbo;
       document.querySelectorAll("[data-fan]").forEach(b => {
         b.classList.toggle("selected", (b.dataset.fan === "medium" ? "med" : b.dataset.fan) === state.fan);
@@ -292,11 +255,8 @@
     document.querySelectorAll("[data-feature]").forEach(b => b.addEventListener("click", async () => {
       const key = b.dataset.feature;
       state[key] = !state[key];
-      
-      // Interlock UI: Quiet & Turbo
       if (key === "quiet" && state.quiet) state.turbo = false;
       if (key === "turbo" && state.turbo) state.quiet = false;
-
       render();
       await sendACCommand();
     }));
@@ -304,50 +264,9 @@
     $("ac-swing").addEventListener("click", () => { state.swing = !state.swing; render(); sendACCommand(); });
     $("ac-auto").addEventListener("click", () => { state.control = state.control === "manual" ? "auto_adaptive" : "manual"; render(); sendACCommand(); });
 
-    function compare() {
-      const roomEl = $("temperature");
-      const room = roomEl ? Number(roomEl.textContent) : NaN;
-      const outside = Number($("out-temp").dataset.value);
-      const validRoom = roomEl && roomEl.textContent.trim() !== "--" && Number.isFinite(room);
-      const validOutside = Number.isFinite(outside);
-      $("compare-in").textContent = validRoom ? room.toFixed(1) + " °C" : "-- °C";
-      $("compare-out").textContent = validOutside ? outside.toFixed(1) + " °C" : "-- °C";
-      if (!validRoom || !validOutside) {
-        $("compare-delta").textContent = "--";
-        $("compare-badge").textContent = "Menunggu data";
-        return;
-      }
-      const delta = room - outside;
-      $("compare-delta").textContent = (delta > 0 ? "+" : "") + delta.toFixed(1) + " °C";
-      $("compare-badge").textContent = Math.abs(delta) < 0.5 ? "Hampir sama" : delta > 0 ? "Kamar lebih panas" : "Luar lebih panas";
-    }
-
-    async function loadWeather() {
-      $("weather-indicator").textContent = "Memperbarui...";
-      try {
-        const url = new URL("https://api.open-meteo.com/v1/forecast");
-        url.search = new URLSearchParams({ latitude: "-7.5755", longitude: "110.8243", current: "temperature_2m,relative_humidity_2m", timezone: "Asia/Jakarta" });
-        const response = await fetch(url, { cache: "no-store" });
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        const data = await response.json();
-        const c = data.current;
-        if (!c || !Number.isFinite(c.temperature_2m)) throw new Error("Data tidak valid");
-        $("out-temp").textContent = c.temperature_2m.toFixed(1);
-        $("out-temp").dataset.value = String(c.temperature_2m);
-        $("out-hum").textContent = c.relative_humidity_2m;
-        $("weather-indicator").textContent = "● Live";
-        compare();
-      } catch (err) {
-        $("weather-indicator").textContent = "Tidak tersedia";
-      }
-    }
-
     render();
     loadACState();
     setInterval(loadACState, 5000);
-    loadWeather();
-    setInterval(loadWeather, 60 * 1000);
-    setInterval(compare, 5000);
   }
 
   if (document.readyState === "loading") {
