@@ -1,4 +1,4 @@
-module.exports = async function handler(req, res) {
+﻿module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "GET") {
@@ -17,7 +17,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const url = base.replace(/\/+$/, "") +
-      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,econo,mode,updated_by,updated_at&limit=1";
+      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,mode,updated_by,updated_at&limit=1";
 
     const response = await fetch(url, {
       headers: {
@@ -33,17 +33,18 @@ module.exports = async function handler(req, res) {
     }
 
     const rows = await response.json();
-        const state = rows[0] || null;
-        const lastSeenMs = state && state.updated_at ? Date.parse(state.updated_at) : NaN;
-        const ageMs = Date.now() - lastSeenMs;
-        const online = Number.isFinite(lastSeenMs) && ageMs >= -5000 && ageMs <= 45000;
-        return res.status(200).json({
-          state,
-          device: {
-            online,
-            last_seen: state && state.updated_at ? state.updated_at : null
-          }
-        });
+    const state = rows[0] || null;
+    const lastSeenMs = state && state.updated_at ? Date.parse(state.updated_at) : NaN;
+    const ageMs = Date.now() - lastSeenMs;
+    const online = Number.isFinite(lastSeenMs) && ageMs >= -5000 && ageMs <= 45000;
+    
+    return res.status(200).json({
+      state,
+      device: {
+        online,
+        last_seen: state && state.updated_at ? state.updated_at : null
+      }
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: "Kesalahan server" });
