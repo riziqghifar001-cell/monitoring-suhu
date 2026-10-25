@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id);
   let commandQueue = Promise.resolve();
   let commandSending = false;
-  let lastManualActionTime = 0; // Mencegah server menimpa state lokal sesaat setelah diklik
+  let lastManualActionTime = 0;
   const state = {
     power: false, mode: "cool", temp: 24, acTempCommand: null,
     fan: "auto", swing: true, quiet: false, turbo: false,
@@ -109,7 +109,7 @@
       $("ac-feedback").textContent = message;
     }
 
-    async function sendACCommandNow() {
+    async function sendACCommandNow(isPowerAction = false) {
       const mode = state.control === "manual" ? "manual" : "auto";
       const acMode = ["cool", "dry", "fan", "heat"].includes(state.mode) ? state.mode : "cool";
       const fan = state.fan === "medium" ? "med" : (["auto", "low", "med", "high"].includes(state.fan) ? state.fan : "auto");
@@ -123,7 +123,8 @@
         swing: Boolean(state.swing),
         quiet: Boolean(state.quiet),
         turbo: Boolean(state.turbo),
-        sleep: Boolean(state.sleep)
+        sleep: Boolean(state.sleep),
+        sync_power: Boolean(isPowerAction) // Memaksa ESP32 menyelaraskan status daya seketika
       };
 
       try {
@@ -142,18 +143,17 @@
       }
     }
 
-    function sendACCommand() {
-      lastManualActionTime = Date.now(); // Tandai waktu aksi manual
+    function sendACCommand(isPowerAction = false) {
+      lastManualActionTime = Date.now();
       commandQueue = commandQueue.catch(() => {}).then(async () => {
         commandSending = true;
-        try { await sendACCommandNow(); } finally { commandSending = false; }
+        try { await sendACCommandNow(isPowerAction); } finally { commandSending = false; }
       });
       return commandQueue;
     }
 
     async function loadACState() {
       if (commandSending) return;
-      // Jangan timpa state lokal jika baru saja ada klik manual dalam 6 detik terakhir
       if (Date.now() - lastManualActionTime < 6000) return;
 
       try {
@@ -240,16 +240,16 @@
       $("ac-auto").setAttribute("aria-checked", String(state.control === "auto_adaptive"));
     }
 
-    $("ac-power").addEventListener("click", async () => { state.power = !state.power; render(); await sendACCommand(); });
-    $("ac-minus").addEventListener("click", async () => { state.temp = Math.max(16, state.temp - 1); render(); await sendACCommand(); });
-    $("ac-plus").addEventListener("click", async () => { state.temp = Math.min(30, state.temp + 1); render(); await sendACCommand(); });
+    $("ac-power").addEventListener("click", async () => { state.power = !state.power; render(); await sendACCommand(true); });
+    $("ac-minus").addEventListener("click", async () => { state.temp = Math.max(16, state.temp - 1); render(); await sendACCommand(false); });
+    $("ac-plus").addEventListener("click", async () => { state.temp = Math.min(30, state.temp + 1); render(); await sendACCommand(false); });
 
-    document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => { state.mode = b.dataset.mode; render(); sendACCommand(); }));
+    document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => { state.mode = b.dataset.mode; render(); sendACCommand(false); }));
     document.querySelectorAll("[data-fan]").forEach(b => b.addEventListener("click", async () => {
       if (state.quiet || state.turbo) return;
       state.fan = b.dataset.fan === "medium" ? "med" : b.dataset.fan;
       render();
-      await sendACCommand();
+      await sendACCommand(false);
     }));
 
     document.querySelectorAll("[data-feature]").forEach(b => b.addEventListener("click", async () => {
@@ -258,11 +258,11 @@
       if (key === "quiet" && state.quiet) state.turbo = false;
       if (key === "turbo" && state.turbo) state.quiet = false;
       render();
-      await sendACCommand();
+      await sendACCommand(false);
     }));
 
-    $("ac-swing").addEventListener("click", () => { state.swing = !state.swing; render(); sendACCommand(); });
-    $("ac-auto").addEventListener("click", () => { state.control = state.control === "manual" ? "auto_adaptive" : "manual"; render(); sendACCommand(); });
+    $("ac-swing").addEventListener("click", () => { state.swing = !state.swing; render(); sendACCommand(false); });
+    $("ac-auto").addEventListener("click", () => { state.control = state.control === "manual" ? "auto_adaptive" : "manual"; render(); sendACCommand(false); });
 
     render();
     loadACState();
