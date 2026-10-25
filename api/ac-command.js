@@ -1,4 +1,4 @@
-module.exports = async function handler(req, res) {
+﻿module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method !== "POST") {
@@ -24,8 +24,7 @@ module.exports = async function handler(req, res) {
       swing: b.swing,
       quiet: b.quiet,
       turbo: b.turbo,
-      sleep: b.sleep,
-      econo: b.econo
+      sleep: b.sleep
     };
 
     if (!["manual", "auto"].includes(command.mode))
@@ -40,10 +39,10 @@ module.exports = async function handler(req, res) {
     if (!["cool", "dry", "fan", "heat"].includes(command.ac_mode))
       return res.status(400).json({ error: "Mode AC tidak valid" });
 
-    if (!["auto", "low", "med", "high"].includes(command.fan))
+    if (!["auto", "low", "med", "medium", "high"].includes(command.fan))
       return res.status(400).json({ error: "Kipas tidak valid" });
 
-    for (const key of ["swing", "quiet", "turbo", "sleep", "econo"]) {
+    for (const key of ["swing", "quiet", "turbo", "sleep"]) {
       if (typeof command[key] !== "boolean")
         return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
     }
