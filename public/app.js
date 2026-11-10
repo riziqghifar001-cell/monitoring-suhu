@@ -1,5 +1,4 @@
-
-const $ = id => document.getElementById(id);
+﻿const $ = id => document.getElementById(id);
 
 // ==========================================
 // 1. KONFIGURASI SUPABASE
@@ -123,7 +122,6 @@ async function fetchLatest() {
 
 // ==========================================
 // 5. AMBIL SELURUH RIWAYAT HARI INI
-//    PAGINASI UNTUK MENGATASI BATAS ROW API
 // ==========================================
 async function fetchTodayHistory() {
   const today = jakartaDateString();
@@ -141,96 +139,78 @@ async function fetchTodayHistory() {
   while (true) {
     const query = new URLSearchParams({
       select: "suhu,kelembapan,recorded_at",
-      and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
+      recorded_at: `gte.${start}`,
+      and: `(recorded_at.lt.${end})`,
       order: "recorded_at.asc",
       limit: String(PAGE_SIZE),
       offset: String(offset)
     });
 
     const rows = await supabaseFetch(
-      `${TABLE_URL}?${query.toString()}`
+      `${TABLE_URL}?${query.toString()}`,
+      `0-${PAGE_SIZE - 1}`
     );
 
-    allRows.push(...rows);
+    const validRows = rows
+      .map(normalizeRecord)
+      .filter(item => item !== null);
+
+    allRows.push(...validRows);
 
     if (rows.length < PAGE_SIZE) break;
-    offset += rows.length;
+    offset += PAGE_SIZE;
   }
 
-  return allRows.map(normalizeRecord).filter(Boolean);
+  return allRows;
 }
 
 // ==========================================
-// 6. STATUS ESP32
+// 6. STATUS KONEKSI
 // ==========================================
-function setStatus(online, message) {
-  const statusText = $("statusText");
+function setStatus(online, text) {
   const dot = $("statusDot");
+  const label = $("statusText");
+  if (!dot || !label) return;
 
-  if (statusText) statusText.textContent = message;
-
-  if (dot) {
-    dot.className = "dot " + (online ? "online" : "offline");
+  if (online) {
+    dot.className = "status online";
+    label.textContent = text;
+  } else {
+    dot.className = "status offline";
+    label.textContent = text;
   }
 }
 
-function showOffline(reason) {
-  setStatus(false, "ESP32 Offline");
-
-  // Jangan tampilkan data lama sebagai data terkini.
-  $("temperature").textContent = "--";
-  $("humidity").textContent = "--";
-  $("temperatureStatus").textContent = reason;
-  $("lastUpdate").textContent = "Tidak ada data terkini";
-
-  // Analisis historis sengaja tidak dihapus.
+// ==========================================
+// 7. DESKRIPSI SUHU RUANGAN
+// ==========================================
+function describeTemperature(suhu) {
+  if (suhu < 24) return "Sejuk dan nyaman";
+  if (suhu < 27) return "Suhu normal ruangan";
+  if (suhu < 30) return "Cukup hangat";
+  return "Terasa panas";
 }
 
 // ==========================================
-// 7. KATEGORI SUHU
+// 8. ANALISIS HARIAN (DISEDERHANAKAN)
 // ==========================================
-function describeTemperature(temp) {
-  if (temp >= 32) return "Panas banget";
-  if (temp >= 29) return "Panas";
-  if (temp >= 26) return "Cenderung hangat";
-  if (temp >= 23) return "Relatif sejuk";
-  return "Sejuk";
-}
+function analyzeDaily(records) {
+  const buckets = Array.from({ length: 24 }, () => []);
 
-// ==========================================
-// 8. ANALISIS SUHU PER JAM
-function analyzeByHour(records) {
-  const today = jakartaDateString();
-  const now = new Date();
-  const currentHour = jakartaHour(now);
-  const elapsedSeconds = now.getMinutes() * 60 + now.getSeconds();
-
-  // ESP32 direncanakan mengirim data setiap 30 detik.
-  const TARGET_PER_HOUR = 120;
-  const MIN_SAMPLES = 60;
-  const MIN_COVERAGE = 0.75;
-
-  const groups = new Map();
-
-  for (const record of records) {
-    if (!record || !record.date || !Number.isFinite(record.suhu)) continue;
-    if (jakartaDateString(record.date) !== today) continue;
-
-    const hour = jakartaHour(record.date);
-    if (!groups.has(hour)) groups.set(hour, []);
-    groups.get(hour).push(record);
+  for (const item of records) {
+    const h = jakartaHour(item.date);
+    if (h >= 0 && h < 24) {
+      buckets[h].push(item.suhu);
+    }
   }
 
+  const MIN_SAMPLES = 10;
+  const MIN_COVERAGE = 0.1;
   const hourly = [];
 
-  for (const [hour, values] of groups.entries()) {
-    // Jam lampau memakai target satu jam penuh.
-    // Jam berjalan memakai target sesuai durasi yang telah berlalu.
-    const expected = hour === currentHour
-      ? Math.min(TARGET_PER_HOUR, Math.ceil(elapsedSeconds / 30))
-      : TARGET_PER_HOUR;
-
-    const temps = values.map(item => item.suhu);
+  for (let hour = 0; hour < 24; hour++) {
+    const temps = buckets[hour];
+    const expected = 60;
     const count = temps.length;
     const coverage = expected > 0 ? Math.min(1, count / expected) : 0;
 
@@ -239,11 +219,7 @@ function analyzeByHour(records) {
     hourly.push({
       hour,
       average: temps.reduce((sum, value) => sum + value, 0) / count,
-      min: Math.min(...temps),
-      max: Math.max(...temps),
-      count,
-      expected,
-      coverage
+      count
     });
   }
 
@@ -255,33 +231,23 @@ function analyzeByHour(records) {
   const coolDetail = $("coolDetail");
   const insight = $("insightText");
 
-  if (!hotHour || !coolHour || !hotDetail || !coolDetail || !insight) {
-    console.error("Elemen analisis suhu tidak ditemukan di HTML.");
-    return;
-  }
+  if (!hotHour || !coolHour || !hotDetail || !coolDetail || !insight) return;
 
   const range = hour =>
     `${String(hour).padStart(2, "0")}.00–${String((hour + 1) % 24).padStart(2, "0")}.00`;
 
   function showResult(element, detail, item) {
     element.textContent = range(item.hour);
-    detail.textContent =
-      `Rata-rata ${item.average.toFixed(1)} °C; rentang ` +
-      `${item.min.toFixed(1)}–${item.max.toFixed(1)} °C; ` +
-      `${item.count}/${item.expected} sampel (${(item.coverage * 100).toFixed(0)}%); ` +
-      `${item.count} pengukuran valid.`;
+    // Detail hanya menampilkan rata-rata suhu sesuai permintaan
+    detail.textContent = `Rata-rata ${item.average.toFixed(1)} °C`;
   }
 
   if (hourly.length < 2) {
     hotHour.textContent = "Belum cukup data";
     coolHour.textContent = "Belum cukup data";
-    hotDetail.textContent =
-      "Setiap jam harus memiliki minimal 60 sampel valid dan kelengkapan 75%.";
-    coolDetail.textContent =
-      "Diperlukan setidaknya dua jam yang memenuhi kriteria tersebut.";
-    insight.textContent =
-      `Baru ${hourly.length} jam memenuhi syarat. ` +
-      "Analisis akan diperbarui ketika data mencukupi.";
+    hotDetail.textContent = "Data suhu per jam akan dianalisis di sini.";
+    coolDetail.textContent = "Data suhu per jam akan dianalisis di sini.";
+    insight.textContent = "Menunggu data sensor untuk mengetahui pola suhu kamar.";
     return;
   }
 
@@ -293,118 +259,79 @@ function analyzeByHour(records) {
   showResult(hotHour, hotDetail, hottest[0]);
   showResult(coolHour, coolDetail, coolest[0]);
 
-  if (Math.abs(highest - lowest) < 1e-9) {
-    insight.textContent =
-      "Rata-rata suhu semua jam yang memenuhi syarat sama.";
-  } else {
-    insight.textContent =
-      `Selisih rata-rata jam terpanas dan tersejuk ${(highest - lowest).toFixed(1)} °C. ` +
-      `${hourly.length} jam memenuhi kriteria minimal 60 sampel dan kelengkapan 75%.`;
-  }
+  insight.textContent =
+    `Selisih rata-rata jam terpanas dan tersejuk ${(highest - lowest).toFixed(1)} °C.`;
 }
 
 // ==========================================
-// // 9. TAMPILKAN DATA TERBARU
+// 9. TAMPILKAN DATA TERBARU
 // ==========================================
 function showOnline(latest) {
   setStatus(true, "ESP32 Terhubung");
 
-  $("temperature").textContent = latest.suhu.toFixed(1);
-  $("humidity").textContent = latest.kelembapan.toFixed(1);
-
-  $("temperatureStatus").textContent =
-    describeTemperature(latest.suhu);
-
-  $("lastUpdate").textContent =
-    "Data diterima " + formatClock(latest.date);
+  if ($("temperature")) $("temperature").textContent = latest.suhu.toFixed(1);
+  if ($("humidity")) $("humidity").textContent = latest.kelembapan.toFixed(1);
+  if ($("temperatureStatus")) $("temperatureStatus").textContent = describeTemperature(latest.suhu);
 
   const analysisDate = $("analysisDate");
-
   if (analysisDate) {
-    analysisDate.textContent = latest.date.toLocaleDateString(
-      "id-ID",
-      {
-        timeZone: "Asia/Jakarta",
-        day: "numeric",
-        month: "short",
-        year: "numeric"
-      }
-    );
+    analysisDate.textContent = latest.date.toLocaleDateString("id-ID", {
+      timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric"
+    });
   }
 }
 
 // ==========================================
-// 10. REFRESH DATA TERBARU
+// 10. REFRESH LOOP UTAMA
 // ==========================================
-async function refreshLatest() {
+async function refreshLatestData() {
   if (requestInProgress) return;
   requestInProgress = true;
 
   try {
     const latest = await fetchLatest();
-
-    if (!latest) {
-      showOffline("Belum ada data valid dari ESP32.");
-      return;
+    if (latest && Date.now() - latest.date.getTime() < OFFLINE_AFTER_MS) {
+      showOnline(latest);
+    } else {
+      setStatus(false, "ESP32 Terputus");
     }
-
-    const age = Date.now() - latest.date.getTime();
-
-    if (age < -5000 || age > OFFLINE_AFTER_MS) {
-      showOffline("ESP32 tidak mengirim data terbaru.");
-      return;
-    }
-
-    showOnline(latest);
-  } catch (error) {
-    showOffline("Gagal mengambil data dari Supabase.");
-    console.error("Kesalahan data terbaru:", error);
+  } catch (err) {
+    console.error("Gagal mengambil data terbaru:", err);
+    setStatus(false, "Kesalahan Koneksi");
   } finally {
     requestInProgress = false;
   }
 }
 
-// ==========================================
-// 11. REFRESH RIWAYAT DAN ANALISIS
-// ==========================================
-async function refreshHistory() {
+async function refreshHistoryData(force = false) {
   if (historyInProgress) return;
+  const now = Date.now();
+  if (!force && now - lastHistoryRefresh < REFRESH_HISTORY_MS) return;
+
   historyInProgress = true;
+  lastHistoryRefresh = now;
 
   try {
-    historyRecords = await fetchTodayHistory();
-    lastHistoryRefresh = Date.now();
-
-    analyzeByHour(historyRecords);
-
-    console.log(
-      `Riwayat hari ini: ${historyRecords.length} pengukuran`
-    );
-  } catch (error) {
-    console.error("Gagal mengambil riwayat:", error);
+    const rows = await fetchTodayHistory();
+    historyRecords = rows;
+    analyzeDaily(historyRecords);
+  } catch (err) {
+    console.error("Gagal mengambil riwayat harian:", err);
   } finally {
     historyInProgress = false;
   }
 }
 
-// ==========================================
-// 12. JALANKAN DASHBOARD
-// ==========================================
-if (
-  SUPABASE_KEY === "TEMPEL_PUBLISHABLE_KEY_DI_SINI" ||
-  !SUPABASE_KEY.trim()
-) {
-  setStatus(false, "Konfigurasi Supabase belum lengkap");
-  console.error("Isi SUPABASE_KEY dengan publishable key.");
+async function initDashboard() {
+  await refreshLatestData();
+  await refreshHistoryData(true);
+
+  setInterval(refreshLatestData, REFRESH_LATEST_MS);
+  setInterval(() => refreshHistoryData(false), REFRESH_HISTORY_MS);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initDashboard);
 } else {
-  refreshLatest();
-  refreshHistory();
-
-  setInterval(refreshLatest, REFRESH_LATEST_MS);
-
-  setInterval(() => {
-    if (Date.now() - lastHistoryRefresh >= REFRESH_HISTORY_MS) {
-      refreshHistory();
-    }
-  }, 5000);
+  initDashboard();
 }

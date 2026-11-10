@@ -24,7 +24,8 @@
       swing: b.swing,
       quiet: b.quiet,
       turbo: b.turbo,
-      sleep: b.sleep
+      sleep: b.sleep,
+      sync_power: Boolean(b.sync_power)
     };
 
     if (!["manual", "auto"].includes(command.mode))
@@ -42,7 +43,7 @@
     if (!["auto", "low", "med", "medium", "high"].includes(command.fan))
       return res.status(400).json({ error: "Kipas tidak valid" });
 
-    for (const key of ["swing", "quiet", "turbo", "sleep"]) {
+    for (const key of ["swing", "quiet", "turbo", "sleep", "sync_power"]) {
       if (typeof command[key] !== "boolean")
         return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
     }

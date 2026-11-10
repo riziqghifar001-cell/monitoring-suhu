@@ -1,12 +1,10 @@
-node_modules/
+﻿node_modules/
 .env
 .env.*
 !.env.example
 .vercel/
 .DS_Store
-
-# Backup lokal
+*.ino
+*.txt
 backup-*/
-public/*.backup-*
-.vercel
-.env*
+*.backup-*
