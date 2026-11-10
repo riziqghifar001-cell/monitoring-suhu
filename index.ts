@@ -38,6 +38,7 @@ const FIELDS = [
   "sisa_biaya_harian",
   "limit_siang",
   "limit_malam",
+  "reset_kwh",
 ];
 
 function json(body: unknown, status = 200) {
@@ -81,6 +82,11 @@ function validState(state: any) {
     state.power !== undefined &&
     state.power !== null &&
     typeof state.power !== "boolean"
+  ) return false;
+
+  if (
+    state.reset_kwh !== undefined &&
+    typeof state.reset_kwh !== "boolean"
   ) return false;
 
   for (const key of ["swing", "quiet", "turbo", "sleep"]) {
@@ -153,6 +159,13 @@ async function merge(
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       update[key] = patch[key];
     }
+  }
+
+  // Jika reset_kwh dikirim bernilai true, set est_kwh_bulan_ini dan est_biaya_bulan_ini jadi 0 di database
+  if (patch.reset_kwh === true) {
+    update["est_kwh_bulan_ini"] = 0;
+    update["est_biaya_bulan_ini"] = 0;
+    update["sisa_kwh_harian"] = update["sisa_kwh_bulanan"];
   }
 
   let result;
