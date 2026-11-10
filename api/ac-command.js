@@ -25,7 +25,9 @@
       quiet: b.quiet,
       turbo: b.turbo,
       sleep: b.sleep,
-      sync_power: Boolean(b.sync_power)
+      sync_power: Boolean(b.sync_power),
+      limit_siang: b.limit_siang !== undefined ? Number(b.limit_siang) : undefined,
+      limit_malam: b.limit_malam !== undefined ? Number(b.limit_malam) : undefined
     };
 
     if (!["manual", "auto"].includes(command.mode))
@@ -47,6 +49,12 @@
       if (typeof command[key] !== "boolean")
         return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
     }
+
+    if (command.limit_siang !== undefined && (isNaN(command.limit_siang) || command.limit_siang < 16 || command.limit_siang > 35))
+      return res.status(400).json({ error: "Limit siang tidak valid (16-35°C)" });
+
+    if (command.limit_malam !== undefined && (isNaN(command.limit_malam) || command.limit_malam < 16 || command.limit_malam > 35))
+      return res.status(400).json({ error: "Limit malam tidak valid (16-35°C)" });
 
     const response = await fetch(
       supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/set_ac_command",
