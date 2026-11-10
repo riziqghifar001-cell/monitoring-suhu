@@ -18,7 +18,7 @@
     const command = {
       mode: b.mode,
       power: b.power,
-      temp: Number(b.temp),
+      temp: b.temp !== undefined ? Number(b.temp) : undefined,
       ac_mode: b.ac_mode,
       fan: b.fan,
       swing: b.swing,
@@ -29,10 +29,11 @@
       limit_siang: b.limit_siang !== undefined ? Number(b.limit_siang) : undefined,
       limit_malam: b.limit_malam !== undefined ? Number(b.limit_malam) : undefined,
       budget_rp_bulan: b.budget_rp_bulan !== undefined ? Number(b.budget_rp_bulan) : undefined,
-      reset_kwh: Boolean(b.reset_kwh)
+      reset_kwh: Boolean(b.reset_kwh),
+      update_settings_only: Boolean(b.update_settings_only)
     };
 
-    if (!command.reset_kwh) {
+    if (!command.reset_kwh && !command.update_settings_only) {
       if (!["manual", "auto"].includes(command.mode))
         return res.status(400).json({ error: "Mode kontrol tidak valid" });
 
@@ -52,16 +53,16 @@
         if (typeof command[key] !== "boolean")
           return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
       }
-
-      if (command.limit_siang !== undefined && (isNaN(command.limit_siang) || command.limit_siang < 16 || command.limit_siang > 35))
-        return res.status(400).json({ error: "Limit siang tidak valid (16-35°C)" });
-
-      if (command.limit_malam !== undefined && (isNaN(command.limit_malam) || command.limit_malam < 16 || command.limit_malam > 35))
-        return res.status(400).json({ error: "Limit malam tidak valid (16-35°C)" });
-
-      if (command.budget_rp_bulan !== undefined && (isNaN(command.budget_rp_bulan) || command.budget_rp_bulan < 0))
-        return res.status(400).json({ error: "Anggaran bulanan tidak valid" });
     }
+
+    if (command.limit_siang !== undefined && (isNaN(command.limit_siang) || command.limit_siang < 16 || command.limit_siang > 35))
+      return res.status(400).json({ error: "Limit siang tidak valid (16-35°C)" });
+
+    if (command.limit_malam !== undefined && (isNaN(command.limit_malam) || command.limit_malam < 16 || command.limit_malam > 35))
+      return res.status(400).json({ error: "Limit malam tidak valid (16-35°C)" });
+
+    if (command.budget_rp_bulan !== undefined && (isNaN(command.budget_rp_bulan) || command.budget_rp_bulan < 0))
+      return res.status(400).json({ error: "Anggaran bulanan tidak valid" });
 
     const response = await fetch(
       supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/set_ac_command",
@@ -80,7 +81,7 @@
 
     if (!response.ok) {
       console.error("Supabase RPC error:", response.status, result);
-      return res.status(502).json({ error: (result && (result.message || result.details || result.hint)) || "Gagal menyimpan perintah ke Supabase", code: result && result.code });
+      return res.status(502).json({ error: (result && (result.message || result.details || result.hint)) || "Gagal menyimpan pengaturan ke Supabase", code: result && result.code });
     }
 
     return res.status(200).json(result);
