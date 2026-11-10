@@ -31,34 +31,6 @@
       reset_kwh: Boolean(b.reset_kwh)
     };
 
-    if (!command.reset_kwh) {
-      if (!["manual", "auto"].includes(command.mode))
-        return res.status(400).json({ error: "Mode kontrol tidak valid" });
-
-      if (typeof command.power !== "boolean")
-        return res.status(400).json({ error: "Power tidak valid" });
-
-      if (!Number.isInteger(command.temp) || command.temp < 16 || command.temp > 30)
-        return res.status(400).json({ error: "Suhu harus 16-30°C" });
-
-      if (!["cool", "dry", "fan", "heat"].includes(command.ac_mode))
-        return res.status(400).json({ error: "Mode AC tidak valid" });
-
-      if (!["auto", "low", "med", "medium", "high"].includes(command.fan))
-        return res.status(400).json({ error: "Kipas tidak valid" });
-
-      for (const key of ["swing", "quiet", "turbo", "sleep", "sync_power"]) {
-        if (typeof command[key] !== "boolean")
-          return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
-      }
-
-      if (command.limit_siang !== undefined && (isNaN(command.limit_siang) || command.limit_siang < 16 || command.limit_siang > 35))
-        return res.status(400).json({ error: "Limit siang tidak valid (16-35°C)" });
-
-      if (command.limit_malam !== undefined && (isNaN(command.limit_malam) || command.limit_malam < 16 || command.limit_malam > 35))
-        return res.status(400).json({ error: "Limit malam tidak valid (16-35°C)" });
-    }
-
     const response = await fetch(
       supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/set_ac_command",
       {
