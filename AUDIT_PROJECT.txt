@@ -1,12 +1,12 @@
 AUDIT LENGKAP PROJECT
 Folder: C:\Users\LENOVO\Downloads\monitoring-dht22
-Tanggal: 2026-10-26 05.44.10
-Jumlah file teks: 14
+Tanggal: 2026-11-11 09.24.30
+Jumlah file teks: 15
 ==========================================================================================
 
 ==========================================================================================
 FILE: .gitignore
-UKURAN: 121 bytes
+UKURAN: 96 bytes
 ==========================================================================================
 node_modules/
 .env
@@ -14,12 +14,10 @@ node_modules/
 !.env.example
 .vercel/
 .DS_Store
-
-# Backup lokal
+*.ino
+*.txt
 backup-*/
-public/*.backup-*
-.vercel
-.env*
+*.backup-*
 
 
 ==========================================================================================
@@ -47,7 +45,7 @@ END $$;
 
 ==========================================================================================
 FILE: api\ac-command.js
-UKURAN: 2474 bytes
+UKURAN: 3652 bytes
 ==========================================================================================
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
@@ -69,34 +67,51 @@ module.exports = async function handler(req, res) {
     const command = {
       mode: b.mode,
       power: b.power,
-      temp: Number(b.temp),
+      temp: b.temp !== undefined ? Number(b.temp) : undefined,
       ac_mode: b.ac_mode,
       fan: b.fan,
       swing: b.swing,
       quiet: b.quiet,
       turbo: b.turbo,
-      sleep: b.sleep
+      sleep: b.sleep,
+      sync_power: Boolean(b.sync_power),
+      limit_siang: b.limit_siang !== undefined ? Number(b.limit_siang) : undefined,
+      limit_malam: b.limit_malam !== undefined ? Number(b.limit_malam) : undefined,
+      budget_rp_bulan: b.budget_rp_bulan !== undefined ? Number(b.budget_rp_bulan) : undefined,
+      reset_kwh: Boolean(b.reset_kwh),
+      update_settings_only: Boolean(b.update_settings_only)
     };
 
-    if (!["manual", "auto"].includes(command.mode))
-      return res.status(400).json({ error: "Mode kontrol tidak valid" });
+    if (!command.reset_kwh && !command.update_settings_only) {
+      if (!["manual", "auto"].includes(command.mode))
+        return res.status(400).json({ error: "Mode kontrol tidak valid" });
 
-    if (typeof command.power !== "boolean")
-      return res.status(400).json({ error: "Power tidak valid" });
+      if (typeof command.power !== "boolean")
+        return res.status(400).json({ error: "Power tidak valid" });
 
-    if (!Number.isInteger(command.temp) || command.temp < 16 || command.temp > 30)
-      return res.status(400).json({ error: "Suhu harus 16-30°C" });
+      if (!Number.isInteger(command.temp) || command.temp < 16 || command.temp > 30)
+        return res.status(400).json({ error: "Suhu harus 16-30°C" });
 
-    if (!["cool", "dry", "fan", "heat"].includes(command.ac_mode))
-      return res.status(400).json({ error: "Mode AC tidak valid" });
+      if (!["cool", "dry", "fan", "heat"].includes(command.ac_mode))
+        return res.status(400).json({ error: "Mode AC tidak valid" });
 
-    if (!["auto", "low", "med", "medium", "high"].includes(command.fan))
-      return res.status(400).json({ error: "Kipas tidak valid" });
+      if (!["auto", "low", "med", "medium", "high"].includes(command.fan))
+        return res.status(400).json({ error: "Kipas tidak valid" });
 
-    for (const key of ["swing", "quiet", "turbo", "sleep"]) {
-      if (typeof command[key] !== "boolean")
-        return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
+      for (const key of ["swing", "quiet", "turbo", "sleep", "sync_power"]) {
+        if (typeof command[key] !== "boolean")
+          return res.status(400).json({ error: "Pengaturan " + key + " tidak valid" });
+      }
     }
+
+    if (command.limit_siang !== undefined && (isNaN(command.limit_siang) || command.limit_siang < 16 || command.limit_siang > 35))
+      return res.status(400).json({ error: "Limit siang tidak valid (16-35°C)" });
+
+    if (command.limit_malam !== undefined && (isNaN(command.limit_malam) || command.limit_malam < 16 || command.limit_malam > 35))
+      return res.status(400).json({ error: "Limit malam tidak valid (16-35°C)" });
+
+    if (command.budget_rp_bulan !== undefined && (isNaN(command.budget_rp_bulan) || command.budget_rp_bulan < 0))
+      return res.status(400).json({ error: "Anggaran bulanan tidak valid" });
 
     const response = await fetch(
       supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/set_ac_command",
@@ -115,7 +130,7 @@ module.exports = async function handler(req, res) {
 
     if (!response.ok) {
       console.error("Supabase RPC error:", response.status, result);
-      return res.status(502).json({ error: (result && (result.message || result.details || result.hint)) || "Gagal menyimpan perintah ke Supabase", code: result && result.code });
+      return res.status(502).json({ error: (result && (result.message || result.details || result.hint)) || "Gagal menyimpan pengaturan ke Supabase", code: result && result.code });
     }
 
     return res.status(200).json(result);
@@ -128,7 +143,7 @@ module.exports = async function handler(req, res) {
 
 ==========================================================================================
 FILE: api\ac-state.js
-UKURAN: 1713 bytes
+UKURAN: 1693 bytes
 ==========================================================================================
 module.exports = async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
@@ -148,9 +163,8 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // Menambahkan est_kwh_bulan_ini dan est_biaya_bulan_ini ke dalam select
     const url = base.replace(/\/+$/, "") +
-      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,mode,est_kwh_bulan_ini,est_biaya_bulan_ini,updated_by,updated_at&limit=1";
+      "/rest/v1/ac_state?device_id=eq.esp32-kamar&select=device_id,rev,power,temp,ac_temp_command,ac_mode,fan,swing,quiet,turbo,sleep,mode,est_kwh_bulan_ini,est_biaya_bulan_ini,sisa_kwh_bulanan,sisa_kwh_harian,limit_siang,limit_malam,updated_by,updated_at&limit=1";
 
     const response = await fetch(url, {
       headers: {
@@ -187,7 +201,7 @@ module.exports = async function handler(req, res) {
 
 ==========================================================================================
 FILE: index.ts
-UKURAN: 7353 bytes
+UKURAN: 9820 bytes
 ==========================================================================================
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -196,7 +210,7 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const DEVICE_TOKEN = Deno.env.get("DEVICE_TOKEN");
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !DEVICE_TOKEN) {
-  throw new Error("Secret SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, atau DEVICE_TOKEN belum tersedia");
+  throw new Error("Secret SUPABASE_URL, SERVICE_ROLE_KEY, atau DEVICE_TOKEN belum tersedia");
 }
 
 const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
@@ -204,7 +218,8 @@ const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, content-type, x-device-token, apikey",
+  "Access-Control-Allow-Headers":
+    "authorization, content-type, x-device-token, apikey",
   "Content-Type": "application/json",
 };
 
@@ -219,10 +234,23 @@ const FIELDS = [
   "turbo",
   "sleep",
   "mode",
+  "est_kwh_bulan_ini",
+  "est_biaya_bulan_ini",
+  "budget_rp_bulan",
+  "sisa_kwh_bulanan",
+  "sisa_biaya_bulanan",
+  "sisa_kwh_harian",
+  "sisa_biaya_harian",
+  "limit_siang",
+  "limit_malam",
+  "reset_kwh",
 ];
 
 function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: cors });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: cors,
+  });
 }
 
 function errorMessage(error: unknown) {
@@ -230,36 +258,100 @@ function errorMessage(error: unknown) {
 }
 
 function validDeviceId(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= 100;
+  return typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= 100;
 }
 
 function validState(state: any) {
-  if (!state || typeof state !== "object" || Array.isArray(state)) return false;
-
-  if (state.temp !== undefined && (!Number.isInteger(state.temp) || state.temp < 16 || state.temp > 30)) return false;
-  if (state.power !== undefined && state.power !== null && typeof state.power !== "boolean") return false;
-
-  for (const key of ["swing", "quiet", "turbo", "sleep"]) {
-    if (state[key] !== undefined && typeof state[key] !== "boolean") return false;
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    return false;
   }
 
-  if (state.ac_mode !== undefined && !["cool", "dry", "fan", "heat"].includes(state.ac_mode)) return false;
-  if (state.fan !== undefined && !["auto", "low", "med", "medium", "high"].includes(state.fan)) return false;
-  if (state.mode !== undefined && !["manual", "auto"].includes(state.mode)) return false;
+  if (
+    state.temp !== undefined &&
+    (!Number.isInteger(state.temp) || state.temp < 16 || state.temp > 30)
+  ) return false;
+
+  if (
+    state.limit_siang !== undefined && state.limit_siang !== null &&
+    (typeof state.limit_siang !== "number" || state.limit_siang < 16 || state.limit_siang > 35)
+  ) return false;
+
+  if (
+    state.limit_malam !== undefined && state.limit_malam !== null &&
+    (typeof state.limit_malam !== "number" || state.limit_malam < 16 || state.limit_malam > 35)
+  ) return false;
+
+  if (
+    state.power !== undefined &&
+    state.power !== null &&
+    typeof state.power !== "boolean"
+  ) return false;
+
+  if (
+    state.reset_kwh !== undefined &&
+    typeof state.reset_kwh !== "boolean"
+  ) return false;
+
+  for (const key of ["swing", "quiet", "turbo", "sleep"]) {
+    if (state[key] !== undefined && typeof state[key] !== "boolean") {
+      return false;
+    }
+  }
+
+  if (state.quiet === true && state.turbo === true) {
+    return false;
+  }
+
+  if (
+    state.ac_mode !== undefined &&
+    !["cool", "dry", "fan", "heat"].includes(state.ac_mode)
+  ) return false;
+
+  if (
+    state.fan !== undefined &&
+    !["auto", "low", "med", "medium", "high"].includes(state.fan)
+  ) return false;
+
+  if (
+    state.mode !== undefined &&
+    !["manual", "auto"].includes(state.mode)
+  ) return false;
 
   return true;
 }
 
-async function merge(deviceId: string, patch: any, by: string, baseRev?: number) {
-  if (!validDeviceId(deviceId)) throw new Error("device_id tidak valid");
-  if (!validState(patch)) throw new Error("Format state tidak valid");
+async function merge(
+  deviceId: string,
+  patch: any,
+  by: string,
+  baseRev?: number,
+) {
+  if (!validDeviceId(deviceId)) {
+    throw new Error("device_id tidak valid");
+  }
 
-  const { data: current, error: readError } = await db.from("ac_state").select("*").eq("device_id", deviceId).maybeSingle();
+  if (!validState(patch)) {
+    throw new Error("Format state atau nilai pengaturan AC tidak valid");
+  }
+
+  const { data: current, error: readError } = await db
+    .from("ac_state")
+    .select("*")
+    .eq("device_id", deviceId)
+    .maybeSingle();
+
   if (readError) throw readError;
 
   const currentRev = Number(current?.rev ?? 0);
+
   if (baseRev !== undefined && baseRev !== currentRev) {
-    return { conflict: true, rev: currentRev, state: current };
+    return {
+      conflict: true,
+      rev: currentRev,
+      state: current,
+    };
   }
 
   const update: Record<string, unknown> = {
@@ -274,98 +366,254 @@ async function merge(deviceId: string, patch: any, by: string, baseRev?: number)
     }
   }
 
+  // Jika reset_kwh dikirim bernilai true, set est_kwh_bulan_ini dan est_biaya_bulan_ini jadi 0 di database
+  if (patch.reset_kwh === true) {
+    update["est_kwh_bulan_ini"] = 0;
+    update["est_biaya_bulan_ini"] = 0;
+    update["sisa_kwh_harian"] = update["sisa_kwh_bulanan"];
+  }
+
   let result;
+
   if (current) {
-    const { data, error } = await db.from("ac_state").update(update).eq("device_id", deviceId).eq("rev", currentRev).select().maybeSingle();
+    const { data, error } = await db
+      .from("ac_state")
+      .update(update)
+      .eq("device_id", deviceId)
+      .eq("rev", currentRev)
+      .select()
+      .maybeSingle();
+
     if (error) throw error;
     result = data;
   } else {
-    const { data, error } = await db.from("ac_state").insert({
-      device_id: deviceId,
-      ...update,
-      ...Object.fromEntries(FIELDS.filter((key) => Object.prototype.hasOwnProperty.call(patch, key)).map((key) => [key, patch[key]])),
-    }).select().single();
+    const { data, error } = await db
+      .from("ac_state")
+      .insert({
+        device_id: deviceId,
+        ...update,
+        ...Object.fromEntries(
+          FIELDS.filter((key) =>
+            Object.prototype.hasOwnProperty.call(patch, key)
+          ).map((key) => [key, patch[key]]),
+        ),
+      })
+      .select()
+      .single();
+
     if (error) throw error;
     result = data;
   }
 
   if (!result) {
-    const { data: latest, error } = await db.from("ac_state").select("*").eq("device_id", deviceId).maybeSingle();
+    const { data: latest, error } = await db
+      .from("ac_state")
+      .select("*")
+      .eq("device_id", deviceId)
+      .maybeSingle();
+
     if (error) throw error;
-    return { conflict: true, rev: Number(latest?.rev ?? 0), state: latest };
+
+    return {
+      conflict: true,
+      rev: Number(latest?.rev ?? 0),
+      state: latest,
+    };
   }
 
-  return { conflict: false, rev: result.rev, state: result };
+  return {
+    conflict: false,
+    rev: result.rev,
+    state: result,
+  };
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
-  if (req.method !== "POST") return json({ success: false, error: "Gunakan POST" }, 405);
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: cors });
+  }
+
+  if (req.method !== "POST") {
+    return json({ success: false, error: "Gunakan POST" }, 405);
+  }
 
   let body: any;
-  try { body = await req.json(); } catch { return json({ success: false, error: "JSON request tidak valid" }, 400); }
 
   try {
-    const deviceAction = ["sensor", "get_state", "report_state"].includes(body.action);
-    const deviceAuthorized = Boolean(DEVICE_TOKEN) && req.headers.get("x-device-token") === DEVICE_TOKEN;
+    body = await req.json();
+  } catch {
+    return json({ success: false, error: "JSON request tidak valid" }, 400);
+  }
 
-    if (deviceAction && !deviceAuthorized) return json({ success: false, error: "Token perangkat tidak valid" }, 401);
-    if (deviceAction && !validDeviceId(body.device_id)) return json({ success: false, error: "device_id tidak valid" }, 400);
+  try {
+    const deviceAction = [
+      "sensor",
+      "get_state",
+      "report_state",
+    ].includes(body.action);
+
+    const deviceAuthorized =
+      Boolean(DEVICE_TOKEN) &&
+      req.headers.get("x-device-token") === DEVICE_TOKEN;
+
+    if (deviceAction && !deviceAuthorized) {
+      return json({ success: false, error: "Token perangkat tidak valid" }, 401);
+    }
+
+    if (deviceAction && !validDeviceId(body.device_id)) {
+      return json({ success: false, error: "device_id tidak valid" }, 400);
+    }
 
     if (body.action === "sensor") {
       const suhu = body.suhu;
       const kelembapan = body.kelembapan;
-      if (typeof suhu !== "number" || typeof kelembapan !== "number" || !Number.isFinite(suhu) || !Number.isFinite(kelembapan)) {
-        return json({ success: false, error: "Nilai suhu/kelembapan tidak valid" }, 400);
+
+      if (
+        typeof suhu !== "number" ||
+        typeof kelembapan !== "number" ||
+        !Number.isFinite(suhu) ||
+        !Number.isFinite(kelembapan) ||
+        suhu < -40 || suhu > 80 ||
+        kelembapan < 0 || kelembapan > 100
+      ) {
+        return json({
+          success: false,
+          error: "Nilai suhu atau kelembapan tidak valid",
+        }, 400);
       }
 
       const row = {
         device_id: body.device_id,
         suhu,
         kelembapan,
-        control_mode: ["manual", "auto"].includes(body.control_mode) ? body.control_mode : "manual",
-        desired_power: body.desired_power === true ? "true" : body.desired_power === false ? "false" : "unknown",
+        control_mode: ["manual", "auto"].includes(body.control_mode)
+          ? body.control_mode
+          : "manual",
+        desired_power: body.desired_power === true
+          ? "true"
+          : body.desired_power === false
+          ? "false"
+          : "unknown",
         ac_temp_command: body.ac_temp_command ?? null,
         ac_mode_command: body.ac_mode_command ?? null,
         last_action: body.last_action ?? null,
       };
 
-      const { data, error } = await db.from("sensor_readings").insert(row).select("id, device_id, suhu, kelembapan, recorded_at").single();
-      if (error) return json({ success: false, error: "Gagal menyimpan sensor", details: error.message }, 500);
+      const { data, error } = await db
+        .from("sensor_readings")
+        .insert(row)
+        .select("id, device_id, suhu, kelembapan, recorded_at")
+        .single();
 
-      return json({ success: true, message: "Data sensor tersimpan", data });
+      if (error) {
+        console.error("[SENSOR INSERT]", error.message);
+        return json({
+          success: false,
+          error: "Gagal menyimpan sensor",
+          details: error.message,
+        }, 500);
+      }
+
+      return json({
+        success: true,
+        message: "Data sensor tersimpan",
+        data,
+      });
     }
 
     if (body.action === "get_state") {
-      const { data, error } = await db.from("ac_state").select("*").eq("device_id", body.device_id).maybeSingle();
+      const { data, error } = await db
+        .from("ac_state")
+        .select("*")
+        .eq("device_id", body.device_id)
+        .maybeSingle();
+
       if (error) throw error;
+
       const sinceRev = Number(body.since_rev ?? 0);
-      return json({ state: data && Number(data.rev) > sinceRev ? data : null });
+
+      return json({
+        state: data && Number(data.rev) > sinceRev ? data : null,
+      });
     }
 
     if (body.action === "report_state") {
-      if (!body.state || typeof body.state !== "object") return json({ success: false, error: "State tidak valid" }, 400);
-      const result = await merge(body.device_id, body.state, "device", Number(body.base_rev ?? 0));
+      if (!body.state || typeof body.state !== "object") {
+        return json({
+          success: false,
+          error: "State tidak valid",
+        }, 400);
+      }
+
+      const result = await merge(
+        body.device_id,
+        body.state,
+        "device",
+        Number(body.base_rev ?? 0),
+      );
+
       return json(result);
     }
 
     if (body.action === "set_state") {
       const authorization = req.headers.get("Authorization");
-      if (!authorization?.startsWith("Bearer ")) return json({ success: false, error: "Login diperlukan" }, 401);
 
-      const userClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: authorization } } });
-      const { data: userData, error: userError } = await userClient.auth.getUser();
-      if (userError || !userData.user) return json({ success: false, error: "Sesi login tidak valid" }, 401);
+      if (!authorization?.startsWith("Bearer ")) {
+        return json({
+          success: false,
+          error: "Login diperlukan",
+        }, 401);
+      }
 
-      if (!validDeviceId(body.device_id) || !validState(body.state)) return json({ success: false, error: "Device ID atau state tidak valid" }, 400);
+      const userClient = createClient(
+        SUPABASE_URL,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        {
+          global: {
+            headers: { Authorization: authorization },
+          },
+        },
+      );
 
-      const result = await merge(body.device_id, body.state, "web", body.base_rev === undefined ? undefined : Number(body.base_rev));
+      const { data: userData, error: userError } =
+        await userClient.auth.getUser();
+
+      if (userError || !userData.user) {
+        return json({
+          success: false,
+          error: "Sesi login tidak valid",
+        }, 401);
+      }
+
+      if (!validDeviceId(body.device_id) || !validState(body.state)) {
+        return json({
+          success: false,
+          error: "Device ID atau state tidak valid",
+        }, 400);
+      }
+
+      const result = await merge(
+        body.device_id,
+        body.state,
+        "web",
+        body.base_rev === undefined ? undefined : Number(body.base_rev),
+      );
+
       return json(result);
     }
 
-    return json({ success: false, error: "Action tidak dikenal" }, 400);
+    return json({
+      success: false,
+      error: "Action tidak dikenal",
+    }, 400);
   } catch (error) {
-    return json({ success: false, error: "Operasi database gagal", details: errorMessage(error) }, 500);
+    console.error("[QUICK-ENDPOINT]", errorMessage(error));
+
+    return json({
+      success: false,
+      error: "Operasi database gagal",
+      details: errorMessage(error),
+    }, 500);
   }
 });
 
@@ -1341,7 +1589,7 @@ const payload = {
 
 ==========================================================================================
 FILE: public\ac-weather-control.js
-UKURAN: 15991 bytes
+UKURAN: 26029 bytes
 ==========================================================================================
 (() => {
   "use strict";
@@ -1353,137 +1601,151 @@ UKURAN: 15991 bytes
     power: false, mode: "cool", temp: 24,
     fan: "auto", swing: true, quiet: false, turbo: false,
     sleep: false, control: "manual",
-    estKwh: 0, estBiaya: 0, budget: 100000
+    estKwh: 0, estBiaya: 0, budget: 100000,
+    limitSiang: 29, limitMalam: 28
   };
 
   function init() {
     if ($("smart-ac")) return;
-    const main = document.querySelector("main") || document.body;
-    const panel = document.createElement("section");
+    
+    const pageAc = $("page-ac") || document.body;
+    const panel = document.createElement("div");
     panel.id = "smart-ac";
     panel.className = "smart-dashboard";
     panel.innerHTML = `
-      <div class="smart-head">
+      <div class="smart-head" style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px 24px; margin-bottom:16px;">
         <div>
           <p class="eyebrow">SMART CLIMATE</p>
-          <h2>Kontrol AC</h2>
+          <h2 style="margin:2px 0;">Kontrol AC</h2>
           <p class="smart-sub">Daikin · Kontrol ruangan</p>
         </div>
         <span id="ac-state-badge" class="ac-badge">OFF</span>
       </div>
 
-      <div class="ac-main-card">
-        <div class="ac-power-row">
+      <div class="ac-main-card" style="background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:24px; margin-bottom:16px;">
+        <!-- Status & Tombol Power -->
+        <div class="ac-power-row" style="display:flex; justify-content:space-between; align-items:center; padding-bottom:18px; border-bottom:1px solid var(--panel-border); margin-bottom:20px;">
           <div>
-            <span class="muted-label">Status AC</span>
-            <div id="ac-power-label" class="ac-power-label">Mati</div>
+            <span class="muted-label" style="font-size:12px; color:var(--text-muted);">Status AC</span>
+            <div id="ac-power-label" style="font-size:16px; font-weight:700; margin-top:2px;">Mati</div>
           </div>
-          <button id="ac-power" class="power-button" aria-pressed="false" type="button">
-            <span class="power-symbol">⏻</span><span id="ac-power-text">Nyalakan</span>
+          <button id="ac-power" class="power-button" aria-pressed="false" type="button" style="display:flex; align-items:center; gap:8px; padding:10px 20px; border-radius:12px; font-weight:700; cursor:pointer;">
+            <span class="power-symbol" style="font-size:16px;">⏻</span><span id="ac-power-text">Nyalakan</span>
           </button>
         </div>
 
-        <div class="ac-temp-control">
+        <!-- Kontrol Suhu -->
+        <div class="ac-temp-control" style="display:flex; justify-content:center; align-items:center; gap:24px; background:rgba(0,0,0,0.2); border:1px solid var(--panel-border); border-radius:14px; padding:18px; margin-bottom:20px;">
           <button id="ac-minus" class="round-button" aria-label="Kurangi suhu" type="button">−</button>
-          <div class="setpoint">
-            <div><strong id="ac-temp">24</strong><span>°C</span></div>
-            <small>Suhu target</small>
+          <div class="setpoint" style="text-align:center;">
+            <div><strong id="ac-temp" style="font-size:36px; font-weight:800; letter-spacing:-1px;">24</strong><span style="font-size:18px; font-weight:600; color:var(--text-muted); margin-left:4px;">°C</span></div>
+            <small style="font-size:11px; color:var(--text-muted); display:block; margin-top:2px;">Suhu target</small>
           </div>
           <button id="ac-plus" class="round-button" aria-label="Tambah suhu" type="button">+</button>
         </div>
 
-        <div class="ac-energy-card" style="margin:0 16px 16px;padding:12px 14px;border:1px solid #d3e3fd;background:#f0f4f9;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
+        <!-- Ringkasan Energi & Anggaran -->
+        <div class="ac-energy-card" style="background:rgba(37,99,235,0.06); border:1px solid rgba(37,99,235,0.2); border-radius:14px; padding:16px; display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
           <div>
-            <span class="muted-label" style="font-size:11px">Estimasi Energi Bulan Ini</span>
-            <div style="font-size:18px;font-weight:700"><span id="ac-est-kwh">0.00</span> kWh</div>
+            <span class="muted-label" style="font-size:11px; color:var(--text-muted); display:block;">Estimasi Energi Bulan Ini</span>
+            <div style="font-size:18px; font-weight:800; margin-top:2px;"><span id="ac-est-kwh">0.00</span> kWh</div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Sisa Bulan: <strong id="ac-sisa-bulan" style="color:var(--text-main);">0.00</strong> kWh</div>
           </div>
-          <div style="text-align:right">
-            <span class="muted-label" style="font-size:11px">Estimasi Biaya / Anggaran</span>
-            <div style="font-size:16px;font-weight:700;color:#1b5e20">Rp <span id="ac-est-biaya">0</span> / Rp 100k</div>
+          <div style="text-align:right;">
+            <span class="muted-label" style="font-size:11px; color:var(--text-muted); display:block;">Estimasi Biaya / Anggaran</span>
+            <div style="font-size:16px; font-weight:800; color:#34d399; margin-top:2px;">Rp <span id="ac-est-biaya">0</span> / Rp 100k</div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Sisa Hari Ini: <strong id="ac-sisa-harian" style="color:var(--text-main);">0.00</strong> kWh</div>
           </div>
         </div>
 
-        <div class="ac-control-label">Mode operasi</div>
-        <div class="ac-button-grid" id="ac-modes">
-          <button class="choice-button selected" data-mode="cool" type="button"><span>❄</span> Cool</button>
-          <button class="choice-button" data-mode="dry" type="button"><span>◉</span> Dry</button>
-          <button class="choice-button" data-mode="fan" type="button"><span>≋</span> Fan</button>
+        <!-- Mode Operasi -->
+        <div style="margin-bottom:16px;">
+          <div class="ac-control-label" style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px; letter-spacing:0.5px;">Mode Operasi</div>
+          <div class="ac-button-grid" id="ac-modes" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+            <button class="choice-button selected" data-mode="cool" type="button" style="padding:10px; border-radius:10px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;"><span>❄</span> Cool</button>
+            <button class="choice-button" data-mode="dry" type="button" style="padding:10px; border-radius:10px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;"><span>◉</span> Dry</button>
+            <button class="choice-button" data-mode="fan" type="button" style="padding:10px; border-radius:10px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;"><span>≋</span> Fan</button>
+          </div>
         </div>
 
-        <div class="ac-options">
-          <div>
-            <div class="ac-control-label">Kecepatan kipas</div>
-            <div class="fan-options" id="ac-fans">
-              <button class="mini-choice" data-fan="low" type="button">Low</button>
-              <button class="mini-choice" data-fan="medium" type="button">Med</button>
-              <button class="mini-choice" data-fan="high" type="button">High</button>
-            </div>
-            <div class="fan-options ac-feature-options" aria-label="Fitur AC" style="margin-top:10px">
-              <button class="mini-choice" data-feature="quiet" type="button" aria-pressed="false">Quiet</button>
-              <button class="mini-choice" data-feature="turbo" type="button" aria-pressed="false">Turbo</button>
-              <button class="mini-choice" data-feature="sleep" type="button" aria-pressed="false">Sleep</button>
-            </div>
+        <!-- Kecepatan Kipas & Fitur -->
+        <div style="margin-bottom:16px;">
+          <div class="ac-control-label" style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px; letter-spacing:0.5px;">Kecepatan Kipas & Fitur</div>
+          <div class="fan-options" id="ac-fans" style="display:flex; gap:8px; margin-bottom:8px;">
+            <button class="mini-choice" data-fan="low" type="button" style="padding:8px 14px; border-radius:8px; font-weight:600; font-size:12px; cursor:pointer; flex:1;">Low</button>
+            <button class="mini-choice" data-fan="medium" type="button" style="padding:8px 14px; border-radius:8px; font-weight:600; font-size:12px; cursor:pointer; flex:1;">Med</button>
+            <button class="mini-choice" data-fan="high" type="button" style="padding:8px 14px; border-radius:8px; font-weight:600; font-size:12px; cursor:pointer; flex:1;">High</button>
           </div>
-          <button id="ac-swing" class="swing-button selected" type="button" aria-pressed="true">
-            ↕ <span>Swing aktif</span>
+          <div class="fan-options ac-feature-options" aria-label="Fitur AC" style="display:flex; gap:8px;">
+            <button class="mini-choice" data-feature="quiet" type="button" aria-pressed="false" style="padding:8px 12px; border-radius:8px; font-weight:600; font-size:12px; cursor:pointer; flex:1;">Quiet</button>
+            <button class="mini-choice" data-feature="turbo" type="button" aria-pressed="false" style="padding:8px 12px; border-radius:8px; font-weight:600; font-size:12px; cursor:pointer; flex:1;">Turbo</button>
+            <button class="mini-choice" data-feature="sleep" type="button" aria-pressed="false" style="padding:8px 12px; border-radius:8px; font-weight:600; font-size:12px; cursor:pointer; flex:1;">Sleep</button>
+          </div>
+        </div>
+
+        <!-- Tombol Swing -->
+        <div>
+          <div class="ac-control-label" style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px; letter-spacing:0.5px;">Pengaturan Aliran Udara</div>
+          <button id="ac-swing" class="swing-button selected" type="button" aria-pressed="true" style="width:100%; padding:12px 16px; border-radius:10px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px; cursor:pointer; font-size:13.5px; white-space:nowrap;">
+            <span style="font-size:15px; line-height:1;">↕</span> <span id="ac-swing-text">Swing aktif</span>
           </button>
         </div>
       </div>
 
-      <div class="ac-automation">
+      <div class="ac-automation" style="background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px 24px; display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <p class="eyebrow">PENGATURAN CERDAS</p>
-          <h3>Auto Adaptive</h3>
-          <p class="smart-sub">Penyesuaian berdasarkan suhu kamar dan cuaca luar.</p>
+          <p class="eyebrow" style="margin-bottom:2px;">PENGATURAN CERDAS</p>
+          <h3 style="font-size:16px; font-weight:700; margin:0;">Auto Adaptive</h3>
+          <p class="smart-sub" style="margin:2px 0 0; font-size:12px;">Penyesuaian berdasarkan suhu kamar dan cuaca luar.</p>
         </div>
-        <button id="ac-auto" class="toggle-button" role="switch" aria-checked="false" type="button">
-          <span></span>
+        <button id="ac-auto" class="toggle-button" role="switch" aria-checked="false" type="button" style="width:48px; height:26px; border-radius:99px; background:rgba(255,255,255,0.1); border:1px solid var(--panel-border); position:relative; cursor:pointer; flex-shrink:0;">
+          <span style="position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:0.2s;"></span>
         </button>
       </div>
-      <p id="ac-feedback" class="ac-feedback" role="status">Tampilan siap.</p>
+    `;
+    pageAc.appendChild(panel);
 
-      <div class="weather-heading">
+    const pageWeather = $("page-weather") || document.body;
+    const weatherPanel = document.createElement("div");
+    weatherPanel.innerHTML = `
+      <div class="weather-heading" style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px 24px; margin-bottom:16px;">
         <div>
           <p class="eyebrow">OPEN-METEO · SURAKARTA</p>
-          <h2>Cuaca di luar</h2>
+          <h2 style="margin:2px 0;">Cuaca di luar</h2>
         </div>
         <span id="weather-indicator" class="weather-indicator">Memuat...</span>
       </div>
 
-      <div class="weather-grid">
-        <article class="weather-card outdoor">
-          <span class="weather-icon">☀</span>
-          <span class="muted-label">Suhu luar</span>
-          <div class="weather-value"><strong id="out-temp">--</strong><span>°C</span></div>
-          <p id="out-condition">Mengambil data cuaca</p>
+      <div class="weather-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+        <article class="weather-card outdoor" style="background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px;">
+          <span class="weather-icon" style="font-size:24px;">☀</span>
+          <span class="muted-label" style="font-size:12px; color:var(--text-muted); display:block; margin-top:8px;">Suhu luar</span>
+          <div class="weather-value" style="font-size:32px; font-weight:800; margin:6px 0;"><strong id="out-temp">--</strong><span style="font-size:16px; font-weight:600; color:var(--text-muted); margin-left:4px;">°C</span></div>
+          <p id="out-condition" style="margin:0; font-size:12px; color:var(--text-muted);">Mengambil data cuaca</p>
         </article>
-        <article class="weather-card">
-          <span class="weather-icon">◌</span>
-          <span class="muted-label">Kelembapan luar</span>
-          <div class="weather-value"><strong id="out-hum">--</strong><span>%</span></div>
-          <p>Kelembapan relatif</p>
+        <article class="weather-card" style="background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px;">
+          <span class="weather-icon" style="font-size:24px;">◌</span>
+          <span class="muted-label" style="font-size:12px; color:var(--text-muted); display:block; margin-top:8px;">Kelembapan luar</span>
+          <div class="weather-value" style="font-size:32px; font-weight:800; margin:6px 0;"><strong id="out-hum">--</strong><span style="font-size:16px; font-weight:600; color:var(--text-muted); margin-left:4px;">%</span></div>
+          <p style="margin:0; font-size:12px; color:var(--text-muted);">Kelembapan relatif</p>
         </article>
       </div>
 
-      <div class="comparison-card">
-        <div class="comparison-title">
-          <div><p class="eyebrow">PERBANDINGAN</p><h3>Kamar vs luar</h3></div>
-          <span id="compare-badge" class="compare-badge">Menunggu data</span>
+      <div class="comparison-card" style="background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px 24px;">
+        <div class="comparison-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <div><p class="eyebrow" style="margin-bottom:2px;">PERBANDINGAN</p><h3 style="font-size:16px; font-weight:700;">Kamar vs luar</h3></div>
+          <span id="compare-badge" class="compare-badge" style="font-size:11px; padding:4px 10px; border-radius:8px; background:rgba(255,255,255,0.05);">Menunggu data</span>
         </div>
-        <div class="compare-values">
-          <div><span>Kamar · DHT22</span><strong id="compare-in">-- °C</strong></div>
-          <div><span>Luar · Open-Meteo</span><strong id="compare-out">-- °C</strong></div>
+        <div class="compare-values" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px; padding:12px; background:rgba(0,0,0,0.2); border-radius:10px;">
+          <div><span style="font-size:11px; color:var(--text-muted); display:block;">Kamar · DHT22</span><strong id="compare-in" style="font-size:15px;">-- °C</strong></div>
+          <div><span style="font-size:11px; color:var(--text-muted); display:block;">Luar · Open-Meteo</span><strong id="compare-out" style="font-size:15px;">-- °C</strong></div>
         </div>
-        <div class="delta-line"><span>Selisih suhu</span><strong id="compare-delta">--</strong></div>
-        <p id="compare-note" class="smart-sub">Perbandingan muncul saat kedua sumber memiliki data valid.</p>
-        <p id="weather-time" class="weather-time">Pembaruan: menunggu data</p>
+        <div class="delta-line" style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:8px;"><span style="color:var(--text-muted);">Selisih suhu</span><strong id="compare-delta">--</strong></div>
+        <p id="compare-note" class="smart-sub" style="margin:0 0 10px; font-size:12px;">Perbandingan muncul saat kedua sumber memiliki data valid.</p>
+        <p id="weather-time" class="weather-time" style="margin:0; font-size:11px; color:var(--text-muted);">Pembaruan: menunggu data</p>
       </div>
     `;
-    main.appendChild(panel);
-
-    function feedback(message) {
-      $("ac-feedback").textContent = message;
-    }
+    pageWeather.appendChild(weatherPanel);
 
     async function sendACCommandNow(isPowerAction = false) {
       const mode = state.control === "manual" ? "manual" : "auto";
@@ -1500,7 +1762,9 @@ UKURAN: 15991 bytes
         quiet: Boolean(state.quiet),
         turbo: Boolean(state.turbo),
         sleep: Boolean(state.sleep),
-        sync_power: Boolean(isPowerAction)
+        sync_power: Boolean(isPowerAction),
+        limit_siang: Number(state.limitSiang) || 29,
+        limit_malam: Number(state.limitMalam) || 28
       };
 
       try {
@@ -1511,10 +1775,9 @@ UKURAN: 15991 bytes
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Permintaan gagal");
-        feedback("Perintah tersimpan di Supabase.");
         return true;
       } catch (error) {
-        feedback("Gagal mengirim perintah: " + error.message);
+        console.error("Gagal mengirim perintah:", error);
         return false;
       }
     }
@@ -1544,6 +1807,10 @@ UKURAN: 15991 bytes
 
         if (a.est_kwh_bulan_ini !== undefined) state.estKwh = Number(a.est_kwh_bulan_ini) || 0;
         if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;
+        if (a.sisa_kwh_bulanan !== undefined) state.sisaBulan = Number(a.sisa_kwh_bulanan) || 0;
+        if (a.sisa_kwh_harian !== undefined) state.sisaHarian = Number(a.sisa_kwh_harian) || 0;
+        if (a.limit_siang !== undefined) state.limitSiang = Number(a.limit_siang) || 29;
+        if (a.limit_malam !== undefined) state.limitMalam = Number(a.limit_malam) || 28;
 
         if (["cool", "dry", "fan", "heat"].includes(a.ac_mode)) state.mode = a.ac_mode;
         if (["auto", "low", "med", "medium", "high"].includes(a.fan)) state.fan = a.fan === "medium" ? "med" : a.fan;
@@ -1565,6 +1832,11 @@ UKURAN: 15991 bytes
       $("ac-temp").textContent = state.temp;
       if ($("ac-est-kwh")) $("ac-est-kwh").textContent = state.estKwh.toFixed(2);
       if ($("ac-est-biaya")) $("ac-est-biaya").textContent = Math.round(state.estBiaya).toLocaleString("id-ID");
+      if ($("ac-sisa-bulan")) $("ac-sisa-bulan").textContent = (state.sisaBulan || 0).toFixed(2);
+      if ($("ac-sisa-harian")) $("ac-sisa-harian").textContent = (state.sisaHarian || 0).toFixed(2);
+      
+      if ($("limit-siang")) $("limit-siang").value = state.limitSiang;
+      if ($("limit-malam")) $("limit-malam").value = state.limitMalam;
 
       $("ac-power-label").textContent = state.power ? "Menyala" : "Mati";
       $("ac-power-text").textContent = state.power ? "Matikan" : "Nyalakan";
@@ -1590,9 +1862,17 @@ UKURAN: 15991 bytes
 
       $("ac-swing").classList.toggle("selected", state.swing);
       $("ac-swing").setAttribute("aria-pressed", String(state.swing));
-      $("ac-swing").querySelector("span").textContent = state.swing ? "Swing aktif" : "Swing mati";
+      const swingText = $("ac-swing-text");
+      if (swingText) swingText.textContent = state.swing ? "Swing aktif" : "Swing mati";
+
       $("ac-auto").classList.toggle("active", state.control === "auto_adaptive");
       $("ac-auto").setAttribute("aria-checked", String(state.control === "auto_adaptive"));
+      
+      const toggleSpan = $("ac-auto").querySelector("span");
+      if (toggleSpan) {
+        toggleSpan.style.left = state.control === "auto_adaptive" ? "25px" : "3px";
+        $("ac-auto").style.background = state.control === "auto_adaptive" ? "var(--accent-blue)" : "rgba(255,255,255,0.1)";
+      }
     }
 
     function compare() {
@@ -1649,6 +1929,65 @@ UKURAN: 15991 bytes
       }
     }
 
+    // Event Listeners untuk Simpan Pengaturan & Reset kWh
+    document.addEventListener("click", async (e) => {
+      if (e.target && e.target.id === "btn-save-settings") {
+        const budgetInput = $("input-budget");
+        const siangInput = $("limit-siang");
+        const malamInput = $("limit-malam");
+        const statusEl = $("settings-status");
+
+        if (budgetInput) state.budget = Number(budgetInput.value) || 100000;
+        if (siangInput) state.limitSiang = Number(siangInput.value) || 29;
+        if (malamInput) state.limitMalam = Number(malamInput.value) || 28;
+
+        if (statusEl) statusEl.textContent = "Menyimpan pengaturan...";
+        const success = await sendACCommand(false);
+        if (statusEl) {
+          statusEl.textContent = success ? "Pengaturan berhasil disimpan ke sistem!" : "Gagal menyimpan pengaturan.";
+          setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        }
+      }
+
+      if (e.target && e.target.id === "btn-reset-kwh") {
+        if (!confirm("Yakin ingin mereset akumulasi kWh bulanan ke 0?")) return;
+        const statusEl = $("settings-status");
+        if (statusEl) statusEl.textContent = "Mereset data kWh...";
+        // Kirim perintah reset atau sinkronisasi
+        try {
+          const payload = {
+            power: state.power,
+            mode: state.control === "manual" ? "manual" : "auto",
+            temp: state.temp,
+            ac_mode: state.mode,
+            fan: state.fan,
+            swing: state.swing,
+            quiet: state.quiet,
+            turbo: state.turbo,
+            sleep: state.sleep,
+            limit_siang: state.limitSiang,
+            limit_malam: state.limitMalam
+          };
+          const res = await fetch("/api/ac-command", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+            state.estKwh = 0;
+            state.estBiaya = 0;
+            render();
+            if (statusEl) statusEl.textContent = "Akumulasi kWh berhasil di-reset!";
+          } else {
+            if (statusEl) statusEl.textContent = "Gagal mereset kWh.";
+          }
+        } catch (err) {
+          if (statusEl) statusEl.textContent = "Terjadi kesalahan jaringan.";
+        }
+        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 4000);
+      }
+    });
+
     $("ac-power").addEventListener("click", async () => { state.power = !state.power; render(); await sendACCommand(true); });
     $("ac-minus").addEventListener("click", async () => { state.temp = Math.max(16, state.temp - 1); render(); await sendACCommand(false); });
     $("ac-plus").addEventListener("click", async () => { state.temp = Math.min(30, state.temp + 1); render(); await sendACCommand(false); });
@@ -1691,11 +2030,12 @@ UKURAN: 15991 bytes
 })();
 
 
+
+
 ==========================================================================================
 FILE: public\app.js
-UKURAN: 11152 bytes
+UKURAN: 9141 bytes
 ==========================================================================================
-
 const $ = id => document.getElementById(id);
 
 // ==========================================
@@ -1820,7 +2160,6 @@ async function fetchLatest() {
 
 // ==========================================
 // 5. AMBIL SELURUH RIWAYAT HARI INI
-//    PAGINASI UNTUK MENGATASI BATAS ROW API
 // ==========================================
 async function fetchTodayHistory() {
   const today = jakartaDateString();
@@ -1838,96 +2177,78 @@ async function fetchTodayHistory() {
   while (true) {
     const query = new URLSearchParams({
       select: "suhu,kelembapan,recorded_at",
-      and: `(recorded_at.gte.${start},recorded_at.lt.${end})`,
+      recorded_at: `gte.${start}`,
+      and: `(recorded_at.lt.${end})`,
       order: "recorded_at.asc",
       limit: String(PAGE_SIZE),
       offset: String(offset)
     });
 
     const rows = await supabaseFetch(
-      `${TABLE_URL}?${query.toString()}`
+      `${TABLE_URL}?${query.toString()}`,
+      `0-${PAGE_SIZE - 1}`
     );
 
-    allRows.push(...rows);
+    const validRows = rows
+      .map(normalizeRecord)
+      .filter(item => item !== null);
+
+    allRows.push(...validRows);
 
     if (rows.length < PAGE_SIZE) break;
-    offset += rows.length;
+    offset += PAGE_SIZE;
   }
 
-  return allRows.map(normalizeRecord).filter(Boolean);
+  return allRows;
 }
 
 // ==========================================
-// 6. STATUS ESP32
+// 6. STATUS KONEKSI
 // ==========================================
-function setStatus(online, message) {
-  const statusText = $("statusText");
+function setStatus(online, text) {
   const dot = $("statusDot");
+  const label = $("statusText");
+  if (!dot || !label) return;
 
-  if (statusText) statusText.textContent = message;
-
-  if (dot) {
-    dot.className = "dot " + (online ? "online" : "offline");
+  if (online) {
+    dot.className = "status online";
+    label.textContent = text;
+  } else {
+    dot.className = "status offline";
+    label.textContent = text;
   }
 }
 
-function showOffline(reason) {
-  setStatus(false, "ESP32 Offline");
-
-  // Jangan tampilkan data lama sebagai data terkini.
-  $("temperature").textContent = "--";
-  $("humidity").textContent = "--";
-  $("temperatureStatus").textContent = reason;
-  $("lastUpdate").textContent = "Tidak ada data terkini";
-
-  // Analisis historis sengaja tidak dihapus.
+// ==========================================
+// 7. DESKRIPSI SUHU RUANGAN
+// ==========================================
+function describeTemperature(suhu) {
+  if (suhu < 24) return "Sejuk dan nyaman";
+  if (suhu < 27) return "Suhu normal ruangan";
+  if (suhu < 30) return "Cukup hangat";
+  return "Terasa panas";
 }
 
 // ==========================================
-// 7. KATEGORI SUHU
+// 8. ANALISIS HARIAN (DISEDERHANAKAN)
 // ==========================================
-function describeTemperature(temp) {
-  if (temp >= 32) return "Panas banget";
-  if (temp >= 29) return "Panas";
-  if (temp >= 26) return "Cenderung hangat";
-  if (temp >= 23) return "Relatif sejuk";
-  return "Sejuk";
-}
+function analyzeDaily(records) {
+  const buckets = Array.from({ length: 24 }, () => []);
 
-// ==========================================
-// 8. ANALISIS SUHU PER JAM
-function analyzeByHour(records) {
-  const today = jakartaDateString();
-  const now = new Date();
-  const currentHour = jakartaHour(now);
-  const elapsedSeconds = now.getMinutes() * 60 + now.getSeconds();
-
-  // ESP32 direncanakan mengirim data setiap 30 detik.
-  const TARGET_PER_HOUR = 120;
-  const MIN_SAMPLES = 60;
-  const MIN_COVERAGE = 0.75;
-
-  const groups = new Map();
-
-  for (const record of records) {
-    if (!record || !record.date || !Number.isFinite(record.suhu)) continue;
-    if (jakartaDateString(record.date) !== today) continue;
-
-    const hour = jakartaHour(record.date);
-    if (!groups.has(hour)) groups.set(hour, []);
-    groups.get(hour).push(record);
+  for (const item of records) {
+    const h = jakartaHour(item.date);
+    if (h >= 0 && h < 24) {
+      buckets[h].push(item.suhu);
+    }
   }
 
+  const MIN_SAMPLES = 10;
+  const MIN_COVERAGE = 0.1;
   const hourly = [];
 
-  for (const [hour, values] of groups.entries()) {
-    // Jam lampau memakai target satu jam penuh.
-    // Jam berjalan memakai target sesuai durasi yang telah berlalu.
-    const expected = hour === currentHour
-      ? Math.min(TARGET_PER_HOUR, Math.ceil(elapsedSeconds / 30))
-      : TARGET_PER_HOUR;
-
-    const temps = values.map(item => item.suhu);
+  for (let hour = 0; hour < 24; hour++) {
+    const temps = buckets[hour];
+    const expected = 60;
     const count = temps.length;
     const coverage = expected > 0 ? Math.min(1, count / expected) : 0;
 
@@ -1936,11 +2257,7 @@ function analyzeByHour(records) {
     hourly.push({
       hour,
       average: temps.reduce((sum, value) => sum + value, 0) / count,
-      min: Math.min(...temps),
-      max: Math.max(...temps),
-      count,
-      expected,
-      coverage
+      count
     });
   }
 
@@ -1952,33 +2269,23 @@ function analyzeByHour(records) {
   const coolDetail = $("coolDetail");
   const insight = $("insightText");
 
-  if (!hotHour || !coolHour || !hotDetail || !coolDetail || !insight) {
-    console.error("Elemen analisis suhu tidak ditemukan di HTML.");
-    return;
-  }
+  if (!hotHour || !coolHour || !hotDetail || !coolDetail || !insight) return;
 
   const range = hour =>
     `${String(hour).padStart(2, "0")}.00–${String((hour + 1) % 24).padStart(2, "0")}.00`;
 
   function showResult(element, detail, item) {
     element.textContent = range(item.hour);
-    detail.textContent =
-      `Rata-rata ${item.average.toFixed(1)} °C; rentang ` +
-      `${item.min.toFixed(1)}–${item.max.toFixed(1)} °C; ` +
-      `${item.count}/${item.expected} sampel (${(item.coverage * 100).toFixed(0)}%); ` +
-      `${item.count} pengukuran valid.`;
+    // Detail hanya menampilkan rata-rata suhu sesuai permintaan
+    detail.textContent = `Rata-rata ${item.average.toFixed(1)} °C`;
   }
 
   if (hourly.length < 2) {
     hotHour.textContent = "Belum cukup data";
     coolHour.textContent = "Belum cukup data";
-    hotDetail.textContent =
-      "Setiap jam harus memiliki minimal 60 sampel valid dan kelengkapan 75%.";
-    coolDetail.textContent =
-      "Diperlukan setidaknya dua jam yang memenuhi kriteria tersebut.";
-    insight.textContent =
-      `Baru ${hourly.length} jam memenuhi syarat. ` +
-      "Analisis akan diperbarui ketika data mencukupi.";
+    hotDetail.textContent = "Data suhu per jam akan dianalisis di sini.";
+    coolDetail.textContent = "Data suhu per jam akan dianalisis di sini.";
+    insight.textContent = "Menunggu data sensor untuk mengetahui pola suhu kamar.";
     return;
   }
 
@@ -1990,706 +2297,937 @@ function analyzeByHour(records) {
   showResult(hotHour, hotDetail, hottest[0]);
   showResult(coolHour, coolDetail, coolest[0]);
 
-  if (Math.abs(highest - lowest) < 1e-9) {
-    insight.textContent =
-      "Rata-rata suhu semua jam yang memenuhi syarat sama.";
-  } else {
-    insight.textContent =
-      `Selisih rata-rata jam terpanas dan tersejuk ${(highest - lowest).toFixed(1)} °C. ` +
-      `${hourly.length} jam memenuhi kriteria minimal 60 sampel dan kelengkapan 75%.`;
-  }
+  insight.textContent =
+    `Selisih rata-rata jam terpanas dan tersejuk ${(highest - lowest).toFixed(1)} °C.`;
 }
 
 // ==========================================
-// // 9. TAMPILKAN DATA TERBARU
+// 9. TAMPILKAN DATA TERBARU
 // ==========================================
 function showOnline(latest) {
   setStatus(true, "ESP32 Terhubung");
 
-  $("temperature").textContent = latest.suhu.toFixed(1);
-  $("humidity").textContent = latest.kelembapan.toFixed(1);
-
-  $("temperatureStatus").textContent =
-    describeTemperature(latest.suhu);
-
-  $("lastUpdate").textContent =
-    "Data diterima " + formatClock(latest.date);
+  if ($("temperature")) $("temperature").textContent = latest.suhu.toFixed(1);
+  if ($("humidity")) $("humidity").textContent = latest.kelembapan.toFixed(1);
+  if ($("temperatureStatus")) $("temperatureStatus").textContent = describeTemperature(latest.suhu);
 
   const analysisDate = $("analysisDate");
-
   if (analysisDate) {
-    analysisDate.textContent = latest.date.toLocaleDateString(
-      "id-ID",
-      {
-        timeZone: "Asia/Jakarta",
-        day: "numeric",
-        month: "short",
-        year: "numeric"
-      }
-    );
+    analysisDate.textContent = latest.date.toLocaleDateString("id-ID", {
+      timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric"
+    });
   }
 }
 
 // ==========================================
-// 10. REFRESH DATA TERBARU
+// 10. REFRESH LOOP UTAMA
 // ==========================================
-async function refreshLatest() {
+async function refreshLatestData() {
   if (requestInProgress) return;
   requestInProgress = true;
 
   try {
     const latest = await fetchLatest();
-
-    if (!latest) {
-      showOffline("Belum ada data valid dari ESP32.");
-      return;
+    if (latest && Date.now() - latest.date.getTime() < OFFLINE_AFTER_MS) {
+      showOnline(latest);
+    } else {
+      setStatus(false, "ESP32 Terputus");
     }
-
-    const age = Date.now() - latest.date.getTime();
-
-    if (age < -5000 || age > OFFLINE_AFTER_MS) {
-      showOffline("ESP32 tidak mengirim data terbaru.");
-      return;
-    }
-
-    showOnline(latest);
-  } catch (error) {
-    showOffline("Gagal mengambil data dari Supabase.");
-    console.error("Kesalahan data terbaru:", error);
+  } catch (err) {
+    console.error("Gagal mengambil data terbaru:", err);
+    setStatus(false, "Kesalahan Koneksi");
   } finally {
     requestInProgress = false;
   }
 }
 
-// ==========================================
-// 11. REFRESH RIWAYAT DAN ANALISIS
-// ==========================================
-async function refreshHistory() {
+async function refreshHistoryData(force = false) {
   if (historyInProgress) return;
+  const now = Date.now();
+  if (!force && now - lastHistoryRefresh < REFRESH_HISTORY_MS) return;
+
   historyInProgress = true;
+  lastHistoryRefresh = now;
 
   try {
-    historyRecords = await fetchTodayHistory();
-    lastHistoryRefresh = Date.now();
-
-    analyzeByHour(historyRecords);
-
-    console.log(
-      `Riwayat hari ini: ${historyRecords.length} pengukuran`
-    );
-  } catch (error) {
-    console.error("Gagal mengambil riwayat:", error);
+    const rows = await fetchTodayHistory();
+    historyRecords = rows;
+    analyzeDaily(historyRecords);
+  } catch (err) {
+    console.error("Gagal mengambil riwayat harian:", err);
   } finally {
     historyInProgress = false;
   }
 }
 
-// ==========================================
-// 12. JALANKAN DASHBOARD
-// ==========================================
-if (
-  SUPABASE_KEY === "TEMPEL_PUBLISHABLE_KEY_DI_SINI" ||
-  !SUPABASE_KEY.trim()
-) {
-  setStatus(false, "Konfigurasi Supabase belum lengkap");
-  console.error("Isi SUPABASE_KEY dengan publishable key.");
+async function initDashboard() {
+  await refreshLatestData();
+  await refreshHistoryData(true);
+
+  setInterval(refreshLatestData, REFRESH_LATEST_MS);
+  setInterval(() => refreshHistoryData(false), REFRESH_HISTORY_MS);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initDashboard);
 } else {
-  refreshLatest();
-  refreshHistory();
-
-  setInterval(refreshLatest, REFRESH_LATEST_MS);
-
-  setInterval(() => {
-    if (Date.now() - lastHistoryRefresh >= REFRESH_HISTORY_MS) {
-      refreshHistory();
-    }
-  }, 5000);
+  initDashboard();
 }
 
 
 ==========================================================================================
 FILE: public\index.html
-UKURAN: 1955 bytes
+UKURAN: 13917 bytes
 ==========================================================================================
 <!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f6f7f4">
-  <title>Monitoring Suhu Kamar</title>
+  <title>Smart Climate Control System - Enterprise IoT Center</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
+  <script src="/ac-weather-control.js" defer></script>
 </head>
 <body>
-  <main class="container">
-    <header class="header">
-      <div>
-        <p class="eyebrow">MONITORING RUANGAN</p>
-        <h1>Kondisi Kamar</h1>
-        <p class="subtitle">Pemantauan suhu dan kelembapan secara langsung.</p>
-      </div>
-      <div class="status">
-        <span id="statusDot" class="dot"></span>
-        <span id="statusText">Menghubungkan sensor...</span>
-      </div>
-    </header>
 
-    <section class="room-info">
-      <div>
-        <span class="room-label">Luas ruangan</span>
-        <strong>15 m&#178;</strong>
+  <!-- TOP NAVBAR HIGH-TECH -->
+  <header class="top-navbar">
+    <div class="nav-brand">
+      <div class="brand-icon">❄</div>
+      <div class="brand-text">
+        <span class="brand-title">Smart Climate IoT</span>
+        <span class="brand-subtitle-mini">Daikin Automation Center</span>
       </div>
-      <span class="room-size">5 m &#215; 3 m</span>
+    </div>
+    <nav class="nav-links">
+      <button class="nav-btn active" data-target="page-dashboard">Dashboard</button>
+      <button class="nav-btn" data-target="page-room">Kondisi Ruangan</button>
+      <button class="nav-btn" data-target="page-ac">Kontrol AC</button>
+      <button class="nav-btn" data-target="page-weather">Suhu Luar</button>
+      <button class="nav-btn" data-target="page-settings">Batas & Anggaran</button>
+    </nav>
+  </header>
+
+  <!-- KONTEN UTAMA -->
+  <main class="main-container">
+
+    <!-- 1. DASHBOARD UTAMA -->
+    <section id="page-dashboard" class="page-tab active">
+      <div class="dashboard-hero">
+        <div class="hero-badge">SISTEM KENDALI CERDAS BERBASIS IoT</div>
+        <h1>Smart Climate Control & Energy Efficiency</h1>
+        <p class="hero-desc">Platform monitoring iklim mikro ruangan dan otomatisasi inverter AC Daikin terintegrasi Cloud untuk efisiensi energi optimal.</p>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="pro-card wide-card">
+          <div class="card-header-flex">
+            <span class="card-icon-box">⚡</span>
+            <div>
+              <h3>Arsitektur & Cara Kerja Sistem</h3>
+              <p class="card-sub">Inovasi kontrol iklim otomatis berbasis mikrokontroler modern</p>
+            </div>
+          </div>
+          <div class="system-flow-grid">
+            <div class="flow-item">
+              <span class="flow-step">01</span>
+              <h4>Sensor Presisi (DHT22)</h4>
+              <p>Mengambil data suhu dan kelembapan real-time secara berkala di dalam ruangan berukuran 15 m².</p>
+            </div>
+            <div class="flow-item">
+              <span class="flow-step">02</span>
+              <h4>Cloud Sync (Supabase)</h4>
+              <p>Menghubungkan mikrokontroler ESP32-S3 ke database awan untuk sinkronisasi perintah dan telemetri energi.</p>
+            </div>
+            <div class="flow-item">
+              <span class="flow-step">03</span>
+              <h4>Eksekusi IR Daikin128</h4>
+              <p>Memancarkan sinyal inframerah kustom secara otomatis menyesuaikan kondisi termal atau input web.</p>
+            </div>
+            <div class="flow-item">
+              <span class="flow-step">04</span>
+              <h4>Open-Meteo Integration</h4>
+              <p>Membaca parameter cuaca luar ruangan di wilayah Surakarta untuk mode penyesuaian suhu adaptif.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pro-card">
+          <div class="card-header-flex">
+            <span class="card-icon-box green-box">🎓</span>
+            <div>
+              <h3>Tim Pengembang</h3>
+              <p class="card-sub">Universitas Muhammadiyah Surakarta</p>
+            </div>
+          </div>
+          <div class="team-profile-box">
+            <div class="avatar-placeholder">IR</div>
+            <div>
+              <strong class="student-name">M Ikhwan Riziq Ghifari</strong>
+              <span class="student-nim">NIM: D400230034</span>
+              <span class="student-major">Program Studi Teknik Elektro</span>
+            </div>
+          </div>
+          <div class="project-specs">
+            <div class="spec-row"><span>Mikrokontroler</span> <strong>ESP32-S3</strong></div>
+            <div class="spec-row"><span>Sensor Utama</span> <strong>DHT22 Pro</strong></div>
+            <div class="spec-row"><span>Database</span> <strong>Supabase PostgreSQL</strong></div>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <section class="readings">
-      <article class="reading-card">
-        <div class="card-heading">
-          <span>Suhu ruangan</span>
-          <span class="symbol">&#176;C</span>
+    <!-- 2. KONDISI RUANGAN -->
+    <section id="page-room" class="page-tab">
+      <div class="header-banner">
+        <div>
+          <p class="eyebrow">MONITORING SENSOR</p>
+          <h1>Kondisi Kamar</h1>
+          <p class="subtitle">Pemantauan lingkungan termal ruangan secara langsung.</p>
         </div>
-        <div class="value-line">
-          <strong id="temperature">--.-</strong>
-          <span>&#176;C</span>
+        <div id="statusDot" class="status online">
+          <span id="statusText">ESP32 Terhubung</span>
         </div>
-        <p id="temperatureStatus" class="reading-note">Menunggu data sensor</p>
-      </article>
+      </div>
 
-      <article class="reading-card">
-        <div class="card-heading">
-          <span>Kelembapan udara</span>
-          <span class="symbol">RH</span>
+      <section class="room-info">
+        <div>
+          <span class="room-label">Luas ruangan</span>
+          <strong>15 m&#178;</strong>
         </div>
-        <div class="value-line">
-          <strong id="humidity">--</strong>
-          <span>%</span>
+        <span class="room-size">5 m &#215; 3 m</span>
+      </section>
+
+      <section class="readings">
+        <article class="reading-card">
+          <div class="card-heading">
+            <span>Suhu ruangan</span>
+            <span class="symbol">&#176;C</span>
+          </div>
+          <div class="value-line">
+            <strong id="temperature">--.-</strong>
+            <span>&#176;C</span>
+          </div>
+          <p id="temperatureStatus" class="reading-note">Menunggu data sensor</p>
+        </article>
+
+        <article class="reading-card">
+          <div class="card-heading">
+            <span>Kelembapan udara</span>
+            <span class="symbol">RH</span>
+          </div>
+          <div class="value-line">
+            <strong id="humidity">--</strong>
+            <span>%</span>
+          </div>
+          <p class="reading-note">Kelembapan relatif udara</p>
+        </article>
+      </section>
+
+      <section class="analysis">
+        <div class="analysis-heading">
+          <div>
+            <p class="eyebrow">ANALISIS HARIAN</p>
+            <h2>Pola Suhu Ruangan</h2>
+          </div>
+          <span class="date-label" id="analysisDate">Hari ini</span>
         </div>
-        <p class="reading-note">Kelembapan relatif udara</p>
-      </article>
+
+        <div class="analysis-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+          <div class="analysis-box hot-box" style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 12px; padding: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span style="font-size: 16px;">🔥</span>
+              <span style="font-size: 12px; font-weight: 700; color: #f87171; text-transform: uppercase;">Jam Paling Panas</span>
+            </div>
+            <strong id="hotHour" style="font-size: 18px; font-weight: 800; display: block; margin-bottom: 4px;">Belum cukup data</strong>
+            <p id="hotDetail" style="margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4;">Data suhu per jam akan dianalisis di sini.</p>
+          </div>
+
+          <div class="analysis-box cool-box" style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 12px; padding: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span style="font-size: 16px;">❄️</span>
+              <span style="font-size: 12px; font-weight: 700; color: #34d399; text-transform: uppercase;">Jam Paling Sejuk</span>
+            </div>
+            <strong id="coolHour" style="font-size: 18px; font-weight: 800; display: block; margin-bottom: 4px;">Belum cukup data</strong>
+            <p id="coolDetail" style="margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4;">Data suhu per jam akan dianalisis di sini.</p>
+          </div>
+        </div>
+
+        <div class="insight" style="margin-top: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--panel-border); border-radius: 12px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 13px; color: var(--text-muted);">Kesimpulan Pengukuran:</span>
+          <strong id="insightText" style="font-size: 13px; color: var(--text-main);">Menunggu data sensor untuk mengetahui pola suhu kamar.</strong>
+        </div>
+      </section>
     </section>
 
-    <footer>
-      <span>Sensor ESP32-S3 + DHT22</span>
-      <span id="lastUpdate">Belum menerima data</span>
-    </footer>
+    <!-- 3. KONTROL AC -->
+    <section id="page-ac" class="page-tab">
+      <!-- Di-mount otomatis oleh ac-weather-control.js -->
+    </section>
+
+    <!-- 4. SUHU LUAR -->
+    <section id="page-weather" class="page-tab">
+      <!-- Di-mount otomatis oleh ac-weather-control.js -->
+    </section>
+
+    <!-- 5. TARGET & JADWAL -->
+    <section id="page-settings" class="page-tab">
+      <div class="header-banner">
+        <div>
+          <p class="eyebrow">KONFIGURASI SISTEM</p>
+          <h1>Batas Suhu & Anggaran</h1>
+          <p class="subtitle">Atur batasan anggaran listrik, ambang batas suhu, dan reset kWh.</p>
+        </div>
+      </div>
+
+      <div class="pro-card" style="margin-bottom: 20px;">
+        <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px;">
+          <span style="font-size: 20px; line-height: 1;">💰</span>
+          <div>
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700;">Target Anggaran Listrik Bulanan</h3>
+            <p class="card-sub" style="margin: 2px 0 0;">Sistem akan membatasi operasional AC jika proyeksi energi mendekati batas anggaran.</p>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top: 16px;">
+          <label for="input-budget" style="font-weight: 600; font-size: 12.5px; color: var(--text-muted); display: block; margin-bottom: 6px;">Anggaran Bulanan (Rupiah)</label>
+          <div style="display: flex; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--panel-border); border-radius: 10px; overflow: hidden;">
+            <span style="padding: 0 14px; font-weight: 700; color: var(--accent-cyan); background: rgba(255,255,255,0.03); border-right: 1px solid var(--panel-border); height: 42px; display: flex; align-items: center;">Rp</span>
+            <input type="number" id="input-budget" value="100000" step="5000" min="10000" style="background: transparent; border: none; color: #fff; padding: 10px 14px; font: inherit; width: 100%; outline: none;">
+          </div>
+          <small style="color: var(--text-muted); display: block; margin-top: 6px;">Tarif Listrik Asumsi: Rp 1.352 / kWh (~73.96 kWh / Rp 100k)</small>
+        </div>
+      </div>
+
+      <div class="pro-card" style="margin-bottom: 20px;">
+        <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px;">
+          <span style="font-size: 20px; line-height: 1;">🌡️</span>
+          <div>
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700;">Ambang Batas Suhu Panas</h3>
+            <p class="card-sub" style="margin: 2px 0 0;">Menentukan batas suhu pemicu mode pendinginan adaptif siang dan malam.</p>
+          </div>
+        </div>
+        
+        <div class="form-row" style="margin-top: 16px; display: flex; flex-direction: column; gap: 14px;">
+          <div class="form-group">
+            <label for="limit-siang" style="font-weight: 600; font-size: 12.5px; color: var(--text-muted); display: block; margin-bottom: 6px;">Batas Panas Siang (°C)</label>
+            <input type="number" id="limit-siang" value="29" step="0.5" style="background: rgba(0,0,0,0.3); border: 1px solid var(--panel-border); color: #fff; padding: 10px 14px; border-radius: 10px; width: 100%; font: inherit; outline: none;">
+          </div>
+          <div class="form-group">
+            <label for="limit-malam" style="font-weight: 600; font-size: 12.5px; color: var(--text-muted); display: block; margin-bottom: 6px;">Batas Panas Malam (°C)</label>
+            <input type="number" id="limit-malam" value="28" step="0.5" style="background: rgba(0,0,0,0.3); border: 1px solid var(--panel-border); color: #fff; padding: 10px 14px; border-radius: 10px; width: 100%; font: inherit; outline: none;">
+          </div>
+        </div>
+      </div>
+
+      <div class="pro-card">
+        <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px;">
+          <span style="font-size: 20px; line-height: 1;">🔄</span>
+          <div>
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700;">Reset Akuntansi Energi</h3>
+            <p class="card-sub" style="margin: 2px 0 0;">Mengatur ulang hitungan akumulasi kWh dan biaya bulanan ke angka 0.</p>
+          </div>
+        </div>
+        
+        <button id="btn-reset-kwh" class="btn-primary" style="margin-top: 12px; width: 100%; padding: 12px; font-size: 14px; font-weight: 700; border-radius: 10px; cursor: pointer; background: rgba(239, 68, 68, 0.2) !important; border-color: rgba(239, 68, 68, 0.4) !important; color: #f87171 !important;">Reset kWh Bulanan</button>
+
+        <button id="btn-save-settings" class="btn-primary" style="margin-top: 14px; width: 100%; padding: 12px; font-size: 14px; font-weight: 700; border-radius: 10px; cursor: pointer;">Simpan Pengaturan Sistem</button>
+        <p id="settings-status" class="card-sub" style="margin-top: 10px; text-align: center;"></p>
+      </div>
+    </section>
+
   </main>
-  <script src="/ac-weather-control.js" defer></script>
+
+  <script>
+    function switchTab(targetPageId) {
+      document.querySelectorAll('.page-tab').forEach(page => page.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+
+      const targetProvider = document.getElementById(targetPageId);
+      if (targetProvider) targetProvider.classList.add('active');
+
+      const activeBtn = document.querySelector(`.nav-btn[data-target="${targetPageId}"]`);
+      if (activeBtn) activeBtn.classList.add('active');
+    }
+
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        switchTab(btn.dataset.target);
+      });
+    });
+  </script>
 </body>
 </html>
 
 
 ==========================================================================================
 FILE: public\style.css
-UKURAN: 13013 bytes
+UKURAN: 11218 bytes
 ==========================================================================================
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
 :root {
-  --bg: #f4f6f3;
-  --surface: #ffffff;
-  --text: #252a25;
-  --muted: #7c837a;
-  --line: #e7eae4;
-  --green: #416b4b;
-  --green-bg: #eef4ed;
-  --orange: #a85d3d;
-  --orange-bg: #fbf0e9;
+  --bg: #090d16;
+  --panel: #111827;
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel-hover: #1f2937;
+  --text-main: #f9fafb;
+  --text-muted: #9ca3af;
+  --accent-blue: #2563eb;
+  --accent-cyan: #06b6d4;
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+  --glow-blue: rgba(37, 99, 235, 0.25);
 }
-* { box-sizing: border-box; }
-body {
+
+* {
+  box-sizing: border-box;
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: "Segoe UI", Arial, sans-serif;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text-main);
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
-.container {
-  width: min(760px, calc(100% - 32px));
-  margin: 42px auto 28px;
+
+/* TOP NAVBAR RESPONSIF */
+.top-navbar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  min-height: 68px;
+  background: rgba(17, 24, 39, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--panel-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 32px;
+  gap: 16px;
 }
-.header {
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.brand-icon {
+  width: 38px;
+  height: 38px;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  box-shadow: 0 0 15px var(--glow-blue);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-title {
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.3px;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.brand-subtitle-mini {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.nav-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  justify-content: flex-end;
+}
+
+.nav-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.nav-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nav-btn.active {
+  color: #ffffff;
+  background: var(--accent-blue);
+  box-shadow: 0 0 12px var(--glow-blue);
+}
+
+/* MAIN CONTAINER & TABS */
+.main-container {
+  max-width: 900px;
+  margin: 32px auto 60px;
+  padding: 0 20px;
+}
+
+.page-tab {
+  display: none;
+}
+
+.page-tab.active {
+  display: block;
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* CARDS & PANELS */
+.pro-card, .smart-dashboard, .card-original, .settings-card, .room-info, .readings article, .analysis, .weather-card, .comparison-card {
+  background: var(--panel) !important;
+  border: 1px solid var(--panel-border) !important;
+  border-radius: 16px !important;
+  padding: 24px !important;
+  margin-bottom: 20px !important;
+  color: var(--text-main) !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3) !important;
+}
+
+.header-banner {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 18px;
   margin-bottom: 24px;
+  gap: 16px;
 }
+
 .eyebrow {
-  margin: 0 0 7px;
-  color: var(--green);
+  margin: 0 0 4px;
+  color: var(--accent-cyan);
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.7px;
+  font-weight: 800;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
 }
+
 h1 {
   margin: 0;
-  font-size: clamp(26px, 5vw, 34px);
-  font-weight: 650;
-  line-height: 1.25;
-  letter-spacing: -1px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.6px;
+  color: var(--text-main);
+  word-break: break-word;
 }
-.subtitle {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 13px;
+
+h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
 }
-.status {
+
+.subtitle, .smart-sub, .hero-desc {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13.5px;
+}
+
+/* DASHBOARD GRID & FLOW */
+.dashboard-hero {
+  margin-bottom: 28px;
+}
+
+.hero-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #60a5fa;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  border-radius: 99px;
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  margin-bottom: 12px;
+}
+
+.dashboard-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card-header-flex {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.card-icon-box {
+  width: 42px;
+  height: 42px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #60a5fa;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.card-icon-box.green-box {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+}
+
+.system-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.flow-item {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.flow-step {
+  font-size: 10px;
+  font-weight: 800;
+  color: #60a5fa;
+  background: rgba(37, 99, 235, 0.2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-bottom: 8px;
+}
+
+.flow-item h4 {
+  margin: 0 0 4px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.flow-item p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* PROFIL TIM */
+.team-profile-box {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
-  border: 1px solid var(--line);
-  border-radius: 30px;
-  background: white;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
+  gap: 16px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  margin-bottom: 16px;
 }
-.dot {
-  width: 8px;
-  height: 8px;
+
+.avatar-placeholder {
+  width: 46px;
+  height: 46px;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  color: white;
+  font-weight: 800;
   border-radius: 50%;
-  background: #c49a50;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  flex-shrink: 0;
 }
-.dot.online { background: #4b9660; }
-.dot.offline { background: #c65b51; }
+
+.student-name {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.student-nim {
+  display: block;
+  font-size: 12px;
+  color: #60a5fa;
+  font-weight: 600;
+}
+
+.student-major {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.project-specs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spec-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--panel-border);
+}
+
+.spec-row span {
+  color: var(--text-muted);
+}
+
+.spec-row strong {
+  color: var(--text-main);
+}
+
+/* SENSOR DISPLAY & READINGS */
 .room-info {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 15px 18px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--surface);
-  margin-bottom: 14px;
+  padding: 14px 18px !important;
+  margin-bottom: 16px !important;
 }
-.room-info > div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.room-label, .room-size {
-  color: var(--muted);
+
+.room-label {
+  color: var(--text-muted);
   font-size: 12px;
 }
-.room-info strong {
-  font-size: 16px;
-  font-weight: 650;
-}
+
 .readings {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
+
 .reading-card {
-  min-height: 170px;
-  padding: 21px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+  padding: 20px !important;
+  position: relative;
+  overflow: hidden;
 }
+
+.reading-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent-blue), transparent);
+}
+
 .card-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
 }
+
 .symbol {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #60a5fa;
   display: grid;
   place-items: center;
-  width: 29px;
-  height: 29px;
-  border-radius: 8px;
-  background: var(--green-bg);
-  color: var(--green);
-  font-size: 12px;
+  font-weight: 700;
 }
+
 .value-line {
   display: flex;
   align-items: baseline;
-  gap: 7px;
-  margin-top: 16px;
+  gap: 6px;
+  margin-top: 12px;
 }
+
 .value-line strong {
-  font-size: clamp(38px, 7vw, 48px);
-  font-weight: 600;
-  letter-spacing: -1.8px;
-  line-height: 1.1;
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  color: var(--text-main);
 }
+
 .value-line > span {
-  color: var(--muted);
-  font-size: 17px;
+  color: var(--text-muted);
+  font-size: 15px;
 }
+
 .reading-note {
-  margin: 11px 0 0;
-  color: var(--muted);
-  font-size: 12px;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
-.analysis {
-  margin-top: 20px;
-  padding: 23px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+
+/* KONTROL AC WIDGET OVERRIDES */
+.smart-dashboard {
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
-.analysis-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 19px;
+
+.smart-head, .ac-main-card, .ac-automation {
+  background: var(--panel) !important;
+  border: 1px solid var(--panel-border) !important;
+  border-radius: 16px !important;
+  padding: 22px !important;
+  margin-bottom: 16px !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3) !important;
 }
-.analysis-heading .eyebrow { margin-bottom: 4px; }
-h2 {
-  margin: 0;
-  font-size: 19px;
-  font-weight: 650;
-  letter-spacing: -.4px;
+
+.ac-badge, .weather-indicator {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: var(--accent-red) !important;
+  border: 1px solid rgba(239, 68, 68, 0.3) !important;
+  padding: 4px 12px !important;
+  border-radius: 99px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
 }
-.date-label {
-  color: var(--muted);
+
+.ac-badge.is-on {
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: var(--accent-green) !important;
+  border: 1px solid rgba(16, 185, 129, 0.3) !important;
+}
+
+.power-button, .btn-primary, .choice-button, .mini-choice, .swing-button, .round-button {
+  background: var(--panel-hover) !important;
+  border: 1px solid var(--panel-border) !important;
+  color: var(--text-main) !important;
+  font-family: inherit !important;
+  transition: all 0.2s ease !important;
+}
+
+.power-button.is-on, .choice-button.selected, .mini-choice.selected, .swing-button.selected {
+  background: var(--accent-blue) !important;
+  border-color: var(--accent-blue) !important;
+  color: #fff !important;
+  box-shadow: 0 0 12px var(--glow-blue) !important;
+}
+
+.round-button {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 50% !important;
+  display: grid !important;
+  place-items: center !important;
+  font-size: 18px !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+}
+
+input[type="text"], input[type="number"], input[type="time"], select {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid var(--panel-border) !important;
+  color: var(--text-main) !important;
+  padding: 10px 14px !important;
+  border-radius: 10px !important;
+  font-family: inherit !important;
+  width: 100% !important;
+}
+
+.status {
+  padding: 4px 10px;
+  border-radius: 99px;
   font-size: 11px;
+  font-weight: 700;
   white-space: nowrap;
 }
-.analysis-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 13px;
-  padding: 15px;
-  border-radius: 10px;
-  margin-top: 10px;
-}
-.analysis-item.hot { background: var(--orange-bg); }
-.analysis-item.cool { background: var(--green-bg); }
-.analysis-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: white;
-  font-size: 19px;
-  font-weight: 600;
-}
-.hot .analysis-icon { color: var(--orange); }
-.cool .analysis-icon { color: var(--green); }
-.analysis-content { min-width: 0; }
-.analysis-label {
-  display: block;
-  margin-bottom: 2px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.analysis-content strong {
-  display: block;
-  font-size: 19px;
-  font-weight: 650;
-}
-.analysis-content p {
-  margin: 3px 0 0;
-  color: #6f756d;
-  font-size: 12px;
-}
-.insight {
-  margin-top: 17px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-.insight strong { font-size: 13px; }
-.insight p {
-  margin: 5px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-.method {
-  margin: 16px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.7;
-}
-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 19px;
-  padding: 0 2px;
-  color: var(--muted);
-  font-size: 11px;
-}
-@media (max-width: 560px) {
-  .container { width: calc(100% - 24px); margin-top: 24px; }
-  .header { flex-direction: column; }
-  .readings { grid-template-columns: 1fr; gap: 10px; }
-  .reading-card { min-height: 145px; padding: 18px; }
-  .value-line { margin-top: 11px; }
-  .analysis { padding: 17px 13px; }
-  .analysis-heading { align-items: flex-start; }
-  footer { flex-direction: column; gap: 4px; }
+
+.status.online {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
-/* ===== Smart AC dashboard refresh ===== */
-#smart-ac { margin-top: 28px; }
-.smart-dashboard { color: var(--text); }
-.smart-head, .weather-heading, .comparison-title {
-  display:flex; align-items:center; justify-content:space-between; gap:14px;
-  margin:0 0 15px;
-}
-.smart-head h2, .weather-heading h2 { font-size:24px; letter-spacing:-.6px; }
-.smart-sub { margin:5px 0 0; color:var(--muted); font-size:12px; }
-.ac-badge, .compare-badge {
-  display:inline-flex; align-items:center; justify-content:center;
-  border-radius:999px; padding:6px 12px; background:#f0f1f4;
-  color:#606675; font-size:11px; font-weight:750;
-}
-.ac-badge.is-on { background:#e0f5e9; color:#18794e; }
-.ac-main-card, .ac-automation, .weather-card, .comparison-card {
-  background:var(--surface); border:1px solid var(--line); border-radius:20px;
-  box-shadow:0 8px 30px rgba(25,35,50,.035);
-}
-.ac-main-card { padding:22px; }
-.ac-power-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
-.muted-label { display:block; color:var(--muted); font-size:12px; }
-.ac-power-label { font-size:19px; font-weight:750; margin-top:2px; }
-.power-button {
-  display:flex; align-items:center; gap:8px; border:0; border-radius:999px;
-  background:#202d40; color:white; padding:11px 16px; font:inherit;
-  font-size:12px; font-weight:700; cursor:pointer; transition:.18s;
-}
-.power-button.is-on { background:#167d56; }
-.power-symbol { font-size:20px; line-height:1; }
-.ac-temp-control {
-  display:flex; justify-content:center; align-items:center; gap:28px;
-  padding:27px 0 24px;
-}
-.round-button {
-  width:48px; height:48px; border:1px solid var(--line); border-radius:50%;
-  background:#f7f8fa; color:var(--text); font-size:26px; cursor:pointer;
-}
-.round-button:hover, .choice-button:hover, .mini-choice:hover { border-color:#8ea5cf; }
-.setpoint { text-align:center; min-width:115px; }
-.setpoint div { display:flex; align-items:flex-start; justify-content:center; gap:3px; }
-.setpoint strong { font-size:62px; line-height:1; letter-spacing:-3px; font-weight:650; }
-.setpoint div span { font-size:19px; color:var(--muted); }
-.setpoint small { color:var(--muted); font-size:12px; }
-.ac-control-label { color:var(--muted); font-size:12px; font-weight:650; margin-bottom:9px; }
-.ac-button-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
-.choice-button {
-  min-height:72px; display:flex; flex-direction:column; align-items:center;
-  justify-content:center; gap:6px; border:1px solid var(--line); border-radius:13px;
-  background:white; color:var(--text); font:inherit; font-size:12px; cursor:pointer;
-}
-.choice-button span { font-size:21px; }
-.choice-button.selected, .mini-choice.selected {
-  border-color:#93b8ef; background:#edf4ff; color:#245cb5;
-}
-.ac-options { display:grid; grid-template-columns:1fr; gap:16px; margin-top:20px; }
-.fan-options { display:flex; flex-wrap:wrap; gap:7px; }
-.mini-choice { border:1px solid var(--line); background:white; color:var(--text);
-  border-radius:999px; padding:8px 12px; font:inherit; font-size:11px; cursor:pointer; }
-.swing-button { display:flex; justify-content:center; align-items:center; gap:8px;
-  border:1px solid var(--line); background:white; border-radius:12px; padding:11px;
-  font:inherit; font-size:12px; cursor:pointer; }
-.swing-button.selected { background:#edf4ff; color:#245cb5; border-color:#c8daf8; }
-.ac-automation { display:flex; align-items:center; justify-content:space-between; gap:15px;
-  padding:19px 21px; margin-top:12px; }
-.ac-automation h3, .comparison-title h3 { margin:0; font-size:17px; }
-.toggle-button { flex:0 0 52px; width:52px; height:30px; padding:3px;
-  border:0; border-radius:99px; background:#d9dde5; cursor:pointer; transition:.2s; }
-.toggle-button span { display:block; width:24px; height:24px; background:white;
-  border-radius:50%; box-shadow:0 1px 4px #0002; transition:.2s; }
-.toggle-button.active { background:#2778db; }
-.toggle-button.active span { transform:translateX(22px); }
-.ac-feedback { margin:10px 2px 25px; color:var(--muted); font-size:11px; line-height:1.6; }
-.weather-heading { margin-top:26px; }
-.weather-indicator { color:#218557; font-size:11px; font-weight:700; white-space:nowrap; }
-.weather-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-.weather-card { position:relative; padding:19px; overflow:hidden; }
-.weather-card.outdoor { background:linear-gradient(140deg,#fff8e9,#fff); }
-.weather-icon { display:block; font-size:23px; margin-bottom:12px; }
-.weather-value { display:flex; align-items:baseline; gap:5px; margin-top:8px; }
-.weather-value strong { font-size:clamp(30px,6vw,40px); letter-spacing:-1.5px; }
-.weather-value span { color:var(--muted); }
-.weather-card p { margin:5px 0 0; color:var(--muted); font-size:11px; }
-.comparison-card { padding:20px; margin-top:12px; }
-.compare-values { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:17px 0; }
-.compare-values > div { background:#f7f8fa; border-radius:12px; padding:13px; min-width:0; }
-.compare-values span { display:block; color:var(--muted); font-size:11px; }
-.compare-values strong { display:block; margin-top:5px; font-size:24px; letter-spacing:-.5px; }
-.delta-line { display:flex; align-items:center; justify-content:space-between; gap:10px;
-  border-top:1px solid var(--line); padding-top:14px; font-size:12px; }
-.delta-line strong { font-size:17px; }
-.weather-time { margin:14px 0 0; color:var(--muted); font-size:10px; }
-@media(max-width:560px) {
-  #smart-ac { margin-top:22px; }
-  .ac-main-card { padding:17px; border-radius:17px; }
-  .ac-temp-control { gap:16px; }
-  .round-button { width:43px; height:43px; }
-  .setpoint strong { font-size:55px; }
-  .ac-button-grid { gap:6px; }
-  .choice-button { min-height:66px; font-size:11px; }
-  .weather-grid { gap:8px; }
-  .weather-card { padding:14px; }
-  .comparison-card { padding:15px; }
-  .compare-values { gap:8px; }
-  .compare-values > div { padding:10px; }
-  .compare-values strong { font-size:21px; }
+.status.offline {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
-
-/* UI POLISH - visual only */
-body {
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-.container {
-  width: min(820px, calc(100% - 32px));
-}
-
-.room-info,
-.reading-card,
-.analysis {
-  box-shadow: 0 3px 14px rgba(30, 45, 30, .035);
-}
-
-.room-info,
-.reading-card,
-.analysis {
-  border-radius: 15px;
-}
-
-.reading-card {
-  transition: border-color .2s ease, box-shadow .2s ease;
-}
-
-.reading-card:hover {
-  border-color: #d3dfd1;
-  box-shadow: 0 6px 20px rgba(30, 45, 30, .05);
-}
-
-.value-line strong,
-.analysis-content strong {
-  font-variant-numeric: tabular-nums;
-}
-
-.analysis-item {
-  padding: 17px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-}
-
-.analysis-item.hot {
-  border-color: #f5e3d8;
-}
-
-.analysis-item.cool {
-  border-color: #dfece0;
-}
-
-.date-label {
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fafbf9;
-}
-
-button:focus-visible {
-  outline: 2px solid #6d9674;
-  outline-offset: 3px;
-}
-
-@media (max-width: 560px) {
-  .container {
-    width: calc(100% - 24px);
-    margin-top: 22px;
+/* RESPONSIF MOBILE & TABLET */
+@media (max-width: 768px) {
+  .top-navbar { 
+    padding: 12px 16px; 
+    flex-direction: column; 
+    align-items: stretch;
+    gap: 12px;
   }
-
-  .room-info {
-    gap: 8px;
-    padding: 13px 14px;
+  .nav-brand {
+    justify-content: space-between;
   }
-
-  .room-info > div {
-    flex-wrap: wrap;
-    gap: 3px 8px;
+  .nav-links { 
+    overflow-x: auto; 
+    width: 100%; 
+    justify-content: flex-start; 
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
   }
-
-  .room-size {
-    text-align: right;
-    white-space: nowrap;
+  .nav-btn { 
+    white-space: nowrap; 
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 12px;
   }
-
-  .readings {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+  .main-container { 
+    padding: 0 14px; 
+    margin-top: 16px; 
+    margin-bottom: 40px;
   }
-
-  .reading-card {
-    min-width: 0;
-    min-height: 154px;
-    padding: 14px 12px;
+  .readings { 
+    grid-template-columns: 1fr; 
   }
-
-  .card-heading {
-    gap: 5px;
-    font-size: 11px;
+  .system-flow-grid { 
+    grid-template-columns: 1fr; 
   }
-
-  .value-line {
-    gap: 3px;
+  .ac-energy-card {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
   }
-
-  .value-line strong {
-    font-size: clamp(27px, 8vw, 38px);
-    letter-spacing: -1.3px;
+  .ac-energy-card > div:last-child {
+    text-align: left !important;
   }
-
-  .value-line > span {
-    font-size: 13px;
-  }
-
-  .reading-note {
-    font-size: 11px;
-    line-height: 1.5;
-  }
-
-  .analysis {
-    padding: 17px 13px;
-  }
-
-  .analysis-item {
-    gap: 10px;
-    padding: 12px 10px;
-  }
-
-  .analysis-content strong {
-    font-size: 16px;
-  }
-
-  .analysis-content p {
-    font-size: 11px;
-    line-height: 1.65;
-  }
-}
-
-@media (max-width: 360px) {
-  .readings {
-    grid-template-columns: 1fr;
-  }
-
-  .reading-card {
-    min-height: 140px;
-    padding: 17px;
-  }
-
-  .value-line strong {
-    font-size: 40px;
-  }
-
-  .analysis-heading {
-    flex-direction: column;
-    align-items: flex-start;
+  .analysis-grid {
+    grid-template-columns: 1fr !important;
   }
 }
 
@@ -2798,3 +3336,1143 @@ UKURAN: 2449 bytes
 ==========================================================================================
 const fs = require("fs"); const file = "public/ac-weather-control.js"; let code = fs.readFileSync(file, "utf8"); if (!code.includes("ac-sisa-harian")) { code = code.replace("<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Energi Bulan Ini</span>\n            <div style=\"font-size:18px;font-weight:700\"><span id=\"ac-est-kwh\">0.00</span> kWh</div>\n          </div>", "<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Energi Bulan Ini</span>\n            <div style=\"font-size:18px;font-weight:700\"><span id=\"ac-est-kwh\">0.00</span> kWh</div>\n            <div style=\"font-size:11px;color:#555;margin-top:2px\">Sisa Bulan: <strong id=\"ac-sisa-bulan\">0.00</strong> kWh</div>\n          </div>"); code = code.replace("<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Biaya / Anggaran</span>\n            <div style=\"font-size:16px;font-weight:700;color:#1b5e20\">Rp <span id=\"ac-est-biaya\">0</span> / Rp 100k</div>\n          </div>", "<div>\n            <span class=\"muted-label\" style=\"font-size:11px\">Estimasi Biaya / Anggaran</span>\n            <div style=\"font-size:16px;font-weight:700;color:#1b5e20\">Rp <span id=\"ac-est-biaya\">0</span> / Rp 50k</div>\n            <div style=\"font-size:11px;color:#1b5e20;margin-top:2px\">Sisa Hari Ini: <strong id=\"ac-sisa-harian\">0.00</strong> kWh</div>\n          </div>"); code = code.replace("if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;", "if (a.est_biaya_bulan_ini !== undefined) state.estBiaya = Number(a.est_biaya_bulan_ini) || 0;\n        if (a.sisa_kwh_bulanan !== undefined) state.sisaBulan = Number(a.sisa_kwh_bulanan) || 0;\n        if (a.sisa_kwh_harian !== undefined) state.sisaHarian = Number(a.sisa_kwh_harian) || 0;"); code = code.replace("if ($(\"ac-est-biaya\")) $(\"ac-est-biaya\").textContent = Math.round(state.estBiaya).toLocaleString(\"id-ID\");", "if ($(\"ac-est-biaya\")) $(\"ac-est-biaya\").textContent = Math.round(state.estBiaya).toLocaleString(\"id-ID\");\n      if ($(\"ac-sisa-bulan\")) $(\"ac-sisa-bulan\").textContent = (state.sisaBulan || 0).toFixed(2);\n      if ($(\"ac-sisa-harian\")) $(\"ac-sisa-harian\").textContent = (state.sisaHarian || 0).toFixed(2);"); fs.writeFileSync(file, code, "utf8"); console.log("SUKSES: File berhasil diperbarui!"); } else { console.log("INFO: Elemen sudah ada."); }
 
+
+==========================================================================================
+FILE: v8-1.ino
+UKURAN: 38308 bytes
+==========================================================================================
+/*
+  Smart Climate Control V8 (Optimized Protection & Energy Sync)
+  Board: ESP32-S3
+  Sensor: DHT22 GPIO4
+  IR: Daikin128 GPIO5
+  Cloud: Supabase Edge Function quick-endpoint
+  Weather: Open-Meteo
+*/
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <DHT.h>
+#include <ArduinoJson.h>
+#include <time.h>
+#include <math.h>
+#include <Preferences.h>
+#include <IRremoteESP8266.h>
+#include <IRsend.h>
+#include <ir_Daikin.h>
+
+// ============================================================
+// 1. CONFIGURATION
+// ============================================================
+const char* WIFI_SSID = "Aryo Sidiq";
+const char* WIFI_PASSWORD = "cukitooo";
+const char* DEVICE_TOKEN = "SRVF0pZEBouRws9vYOSW2ZIBGpABG60kKFpfNbDIzjg";
+const char* API ="https://rcgcerurtrnfccrwcuns.supabase.co/functions/v1/quick-endpoint";
+const char* DEVICE_ID = "esp32-kamar";
+
+// ============================================================
+// 2. HARDWARE
+// ============================================================
+#define DHTPIN 4
+#define DHTTYPE DHT22
+const uint16_t IR_PIN = 5;
+
+DHT dht(DHTPIN, DHTTYPE);
+IRDaikin128 ac(IR_PIN);
+Preferences prefs;
+
+// ============================================================
+// 3. ENERGY / MONTHLY BUDGET CONFIGURATION
+// ============================================================
+const float TARIF_PER_KWH = 1352.0f;
+const float ANGGARAN_BULAN_RP = 100000.0f;
+const float TARGET_TOTAL_KWH_BULANAN = ANGGARAN_BULAN_RP / TARIF_PER_KWH; 
+
+// Asumsi Daya Perangkat (Software Estimate)
+const float DAYA_COOL_KW = 0.633f;
+const float DAYA_FAN_KW  = 0.042f;
+
+// Target Adaptif Siang
+const float TARGET_SIANG_NORMAL = 26.0f;
+const float TARGET_SIANG_PANAS  = 25.0f;
+const float SUHU_KAMAR_PANAS    = 29.0f;
+const float SUHU_LUAR_PANAS     = 33.0f;
+
+// Jadwal Malam (22:00 - 05:00)
+const int JAM_MALAM_MULAI = 22;
+const int JAM_MALAM_SELESAI = 5;
+const float TARGET_MALAM_COOL_ON  = 28.0f;
+const float TARGET_MALAM_FAN_BACK = 26.5f;
+
+// Interval Waktu (Millis)
+const unsigned long READ_INTERVAL        = 2500UL;
+const unsigned long POST_INTERVAL        = 30000UL;
+const unsigned long POLL_INTERVAL        = 5000UL;
+const unsigned long LAPOR_INTERVAL       = 1500UL;
+const unsigned long WEATHER_INTERVAL     = 900000UL;
+const unsigned long WIFI_INTERVAL        = 10000UL;
+const unsigned long IR_MIN_INTERVAL      = 3000UL;
+const unsigned long AUTO_INTERVAL        = 10000UL;
+const unsigned long ENERGY_SAVE_MS       = 300000UL; 
+const unsigned long SENSOR_STALE_MS      = 15000UL;
+
+// ============================================================
+// PERBAIKAN UTAMA: PROTEKSI SHORT-CYCLE & HOLD MODE DIPERKETAT
+// ============================================================
+// Kompresor minimal nyala 5 menit & minimal mati 5 menit agar tidak gampang gonta-ganti
+const unsigned long MIN_COOL_ON_MS   = 5UL * 60UL * 1000UL; 
+const unsigned long MIN_COOL_OFF_MS  = 5UL * 60UL * 1000UL; 
+// Minimal tahan di mode yang sama selama 4 menit agar tidak bolak-balik Cool <-> Fan dalam 1 menit
+const unsigned long MIN_MODE_HOLD_MS = 4UL * 60UL * 1000UL; 
+
+const int JUMLAH_SAMPEL = 5;
+
+// ============================================================
+// 4. SENSOR STATE
+// ============================================================
+float sampelSuhu[JUMLAH_SAMPEL] = {NAN, NAN, NAN, NAN, NAN};
+float sampelRH[JUMLAH_SAMPEL] = {NAN, NAN, NAN, NAN, NAN};
+int indeksSampel = 0;
+int jumlahSampel = 0;
+float suhuKamar = NAN;
+float kelembapanKamar = NAN;
+unsigned long waktuSensorValid = 0;
+
+// ============================================================
+// 5. AC / CONTROL STATE
+// ============================================================
+uint8_t suhuTarget = 26;
+uint8_t modeAC = kDaikin128Cool;
+uint8_t kecepatanKipas = kDaikin128FanAuto;
+
+bool swing = false;
+bool quiet = false;
+bool turbo = false;
+bool sleepMode = false;
+
+bool statusDayaDiketahui = false; 
+bool targetDayaON = false;
+bool kompresorDiperkirakanAktif = false;
+bool modeKontrolAuto = true;
+bool sinkronAwal = false;
+
+String keputusanTerakhir = "Menunggu data sensor";
+String modeJadwal = "init";
+long revTerakhir = -1;
+bool perluLapor = false;
+
+unsigned long waktuIRTerakhir = 0;
+unsigned long waktuMulaiDayaON = 0;
+unsigned long waktuMulaiDayaOFF = 0;
+unsigned long waktuMulaiKompresor = 0;
+unsigned long waktuMulaiMode = 0; // Timer pelacak durasi mode aktif
+bool timerDayaDiinisialisasi = false;
+
+bool irTertunda = false;
+unsigned long httpBackoffMs = 0;
+unsigned long waktuHttpGagalTerakhir = 0;
+
+// ============================================================
+// 6. MONTHLY ENERGY STATE
+// ============================================================
+float kWhCoolBulanIni = 0.0f;
+float kWhFanBulanIni = 0.0f;
+float kWhLainBulanIni = 0.0f;
+uint32_t kunciBulanTerakhir = 0;
+unsigned long energyTickMs = 0;
+unsigned long energySaveMs = 0;
+
+// ============================================================
+// 7. WEATHER STATE
+// ============================================================
+float suhuLuar = NAN;
+float rhLuar = NAN;
+bool cuacaValid = false;
+unsigned long waktuCuaca = 0;
+
+// ============================================================
+// 8. SYSTEM TIMERS
+// ============================================================
+unsigned long timerSensor = 0;
+unsigned long timerPost = 0;
+unsigned long timerPoll = 0;
+unsigned long timerLapor = 0;
+unsigned long timerCuaca = 0;
+unsigned long timerAuto = 0;
+unsigned long timerWiFi = 0;
+
+void simpanDataNVS();
+float targetAdaptifSiang();
+
+// ============================================================
+// 9. UTILITIES & DIAGNOSTICS
+// ============================================================
+bool sensorSegar() {
+  return !isnan(suhuKamar) && !isnan(kelembapanKamar) &&
+         (millis() - waktuSensorValid < SENSOR_STALE_MS);
+}
+
+float trimmedMean(float* data, int count) {
+  if (count <= 0) return NAN;
+  float temp[JUMLAH_SAMPEL];
+  for (int i = 0; i < count; i++) temp[i] = data[i];
+
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = 0; j < count - i - 1; j++) {
+      if (temp[j] > temp[j + 1]) {
+        float t = temp[j]; temp[j] = temp[j + 1]; temp[j + 1] = t;
+      }
+    }
+  }
+
+  if (count < JUMLAH_SAMPEL) {
+    float sum = 0;
+    for (int i = 0; i < count; i++) sum += temp[i];
+    return sum / count;
+  }
+
+  float sum = 0;
+  for (int i = 1; i < count - 1; i++) sum += temp[i];
+  return sum / (count - 2);
+}
+
+void bacaSensor() {
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  if (isnan(t) || isnan(h) || t < -40 || t > 80 || h < 0 || h > 100) {
+    Serial.println("[DHT22] Pembacaan sensor tidak valid.");
+    return;
+  }
+
+  sampelSuhu[indeksSampel] = t;
+  sampelRH[indeksSampel] = h;
+  indeksSampel = (indeksSampel + 1) % JUMLAH_SAMPEL;
+  if (jumlahSampel < JUMLAH_SAMPEL) jumlahSampel++;
+
+  suhuKamar = trimmedMean(sampelSuhu, jumlahSampel);
+  kelembapanKamar = trimmedMean(sampelRH, jumlahSampel);
+  waktuSensorValid = millis();
+}
+
+bool waktuValid(struct tm* out) {
+  return getLocalTime(out, 50) && out->tm_year >= (2024 - 1900);
+}
+
+uint32_t kunciBulan(const struct tm& t) {
+  return (uint32_t)(t.tm_year + 1900) * 100UL + (uint32_t)(t.tm_mon + 1);
+}
+
+int getHariDalamBulan(const struct tm& t) {
+  int tahun = t.tm_year + 1900;
+  int bulan = t.tm_mon + 1;
+  if (bulan == 2) {
+    bool kabisat = ((tahun % 4 == 0) && (tahun % 100 != 0)) || (tahun % 400 == 0);
+    return kabisat ? 29 : 28;
+  }
+  if (bulan == 4 || bulan == 6 || bulan == 9 || bulan == 11) return 30;
+  return 31;
+}
+
+bool dalamJadwalMalam(const struct tm& t) {
+  return (t.tm_hour >= JAM_MALAM_MULAI || t.tm_hour < JAM_MALAM_SELESAI);
+}
+
+String namaMode(uint8_t mode) {
+  if (mode == kDaikin128Cool) return "cool";
+  if (mode == kDaikin128Dry) return "dry";
+  if (mode == kDaikin128Fan) return "fan";
+  if (mode == kDaikin128Heat) return "heat";
+  return "cool";
+}
+
+uint8_t konversiMode(String mode) {
+  mode.trim(); mode.toLowerCase();
+  if (mode == "dry") return kDaikin128Dry;
+  if (mode == "fan") return kDaikin128Fan;
+  if (mode == "heat") return kDaikin128Heat;
+  return kDaikin128Cool;
+}
+
+uint8_t konversiKipas(String kipas) {
+  kipas.trim(); kipas.toLowerCase();
+  if (kipas == "low") return kDaikin128FanLow;
+  if (kipas == "med" || kipas == "medium") return kDaikin128FanMed;
+  if (kipas == "high") return kDaikin128FanHigh;
+  return kDaikin128FanAuto;
+}
+
+String namaKipas(uint8_t kipas) {
+  if (kipas == kDaikin128FanLow) return "low";
+  if (kipas == kDaikin128FanMed) return "med";
+  if (kipas == kDaikin128FanHigh) return "high";
+  return "auto";
+}
+
+bool irSiap() {
+  return waktuIRTerakhir == 0 || millis() - waktuIRTerakhir >= IR_MIN_INTERVAL;
+}
+
+// ============================================================
+// 10. UNIFIED ACTUATION GATE & STRICT TIMER GUARD
+// ============================================================
+bool validasiTimerGuard(bool dayaBaru, uint8_t modeBaru) {
+  if (!timerDayaDiinisialisasi) return true;
+  unsigned long now = millis();
+
+  bool kompresorAkanAktif = dayaBaru && (modeBaru == kDaikin128Cool);
+
+  // Proteksi 1: Kompresor baru boleh OFF jika sudah nyala minimal 5 menit (MIN_COOL_ON_MS)
+  if (kompresorDiperkirakanAktif && (!dayaBaru || modeBaru != kDaikin128Cool)) {
+    if (now - waktuMulaiKompresor < MIN_COOL_ON_MS) {
+      return false; // Tolak! Belum waktunya kompresor mati
+    }
+  }
+
+  // Proteksi 2: Kompresor baru boleh ON jika sebelumnya sudah mati minimal 5 menit (MIN_COOL_OFF_MS)
+  if (kompresorAkanAktif && !kompresorDiperkirakanAktif) {
+    if (now - waktuMulaiDayaOFF < MIN_COOL_OFF_MS) {
+      return false; // Tolak! Mencegah short-cycle kompresor
+    }
+  }
+
+  // Proteksi 3: Hold Mode (Mencegah gonta-ganti Cool <-> Fan kurang dari 4 menit)
+  bool perubahanModeAktif = (modeBaru != modeAC);
+  if (perubahanModeAktif && (now - waktuMulaiMode < MIN_MODE_HOLD_MS)) {
+    return false; // Tolak! Mode harus bertahan minimal 4 menit
+  }
+
+  return true;
+}
+
+void kirimFrameIRActual(bool toggleDaya) {
+  ac.setPowerToggle(toggleDaya);
+  ac.setTemp(suhuTarget);
+  ac.setMode(modeAC);
+  ac.setFan(kecepatanKipas);
+  ac.setSwingVertical(swing);
+  ac.setQuiet(quiet);
+  ac.setPowerful(turbo);
+  ac.setSleep(sleepMode);
+
+  ac.send();
+  ac.setPowerToggle(false);
+  waktuIRTerakhir = millis();
+}
+
+bool eksekusiPengaturanAC(bool dayaBaru, uint8_t modeBaru, uint8_t tempBaru, 
+                         uint8_t fanBaru, bool swingBaru, bool quietBaru, 
+                         bool turboBaru, bool sleepBaru, bool paksaKirim) {
+  
+  // Jika status daya belum diketahui, kita set default menjadi true (asumsi user ingin mengontrol)
+  // atau biarkan jika dalam mode AUTO ketat.
+  if (!statusDayaDiketahui) {
+    statusDayaDiketahui = true; // Auto-assume agar tidak tertahan terus
+    targetDayaON = dayaBaru;
+  }
+
+  if (!validasiTimerGuard(dayaBaru, modeBaru) && !paksaKirim) {
+    keputusanTerakhir = "Aksi ditolak: Melanggar Proteksi Timer Guard / Min Hold Mode";
+    return false;
+  }
+
+  bool perubahanDaya = (dayaBaru != targetDayaON);
+  bool perubahanState = perubahanDaya || (modeBaru != modeAC) || (tempBaru != suhuTarget) ||
+                        (fanBaru != kecepatanKipas) || (swingBaru != swing) ||
+                        (quietBaru != quiet) || (turboBaru != turbo) || (sleepBaru != sleepMode);
+
+  if (!perubahanState && !paksaKirim) return true;
+
+  unsigned long now = millis();
+
+  targetDayaON = dayaBaru;
+  if (modeAC != modeBaru) {
+    modeAC = modeBaru;
+    waktuMulaiMode = now; 
+  }
+  suhuTarget = tempBaru;
+  quiet = quietBaru;
+  turbo = turboBaru;
+  if (quiet && turbo) turbo = false;
+  if (!quiet && !turbo) {
+    kecepatanKipas = fanBaru;
+  }
+  swing = swingBaru;
+  sleepMode = sleepBaru;
+
+  bool kompresorAktifBaru = targetDayaON && (modeAC == kDaikin128Cool);
+  if (kompresorAktifBaru && !kompresorDiperkirakanAktif) {
+    waktuMulaiKompresor = now;
+  }
+  kompresorDiperkirakanAktif = kompresorAktifBaru;
+
+  if (perubahanDaya) {
+    timerDayaDiinisialisasi = true;
+    if (targetDayaON) waktuMulaiDayaON = now;
+    else waktuMulaiDayaOFF = now;
+  }
+
+  // EKSEKUSI PENGIRIMAN IR
+  if (irSiap()) {
+    kirimFrameIRActual(perubahanDaya);
+    irTertunda = false;
+  } else {
+    irTertunda = true;
+  }
+
+  perluLapor = true;
+  simpanDataNVS();
+  return true;
+}
+
+// ============================================================
+// 11. NVS & ENERGY ACCOUNTING (YANG DISELARASKAN)
+// ============================================================
+void muatDataNVS() {
+  prefs.begin("climate8", false);
+  kWhCoolBulanIni = prefs.getFloat("kwhCoolM", 0.0f);
+  kWhFanBulanIni = prefs.getFloat("kwhFanM", 0.0f);
+  kWhLainBulanIni = prefs.getFloat("kwhOthM", 0.0f);
+  kunciBulanTerakhir = prefs.getUInt("monthKey", 0);
+  statusDayaDiketahui = prefs.getBool("known", true);
+  targetDayaON = prefs.getBool("power", false);
+  modeKontrolAuto = prefs.getBool("auto", true);
+  suhuTarget = prefs.getUChar("target", 26);
+  modeAC = prefs.getUChar("acMode", kDaikin128Cool);
+  prefs.end();
+
+  if (suhuTarget < 16 || suhuTarget > 30) suhuTarget = 26;
+  if (modeAC != kDaikin128Cool && modeAC != kDaikin128Dry &&
+      modeAC != kDaikin128Fan && modeAC != kDaikin128Heat) modeAC = kDaikin128Cool;
+
+  timerDayaDiinisialisasi = false;
+  kompresorDiperkirakanAktif = targetDayaON && (modeAC == kDaikin128Cool);
+}
+
+void simpanDataNVS() {
+  prefs.begin("climate8", false);
+  prefs.putFloat("kwhCoolM", kWhCoolBulanIni);
+  prefs.putFloat("kwhFanM", kWhFanBulanIni);
+  prefs.putFloat("kwhOthM", kWhLainBulanIni);
+  prefs.putUInt("monthKey", kunciBulanTerakhir);
+  prefs.putBool("known", statusDayaDiketahui);
+  prefs.putBool("power", targetDayaON);
+  prefs.putBool("auto", modeKontrolAuto);
+  prefs.putUChar("target", suhuTarget);
+  prefs.putUChar("acMode", modeAC);
+  prefs.end();
+}
+
+void resetEnergiBulanan(uint32_t key) {
+  kWhCoolBulanIni = 0.0f;
+  kWhFanBulanIni = 0.0f;
+  kWhLainBulanIni = 0.0f;
+  kunciBulanTerakhir = key;
+  simpanDataNVS();
+}
+
+// PERBAIKAN: Perhitungan kWh dipecah presisi antara kompresor ON (Cool) vs Fan saja
+void perbaruiEnergi() {
+  unsigned long nowMs = millis();
+  if (energyTickMs == 0) {
+    energyTickMs = nowMs;
+    return;
+  }
+
+  unsigned long elapsed = nowMs - energyTickMs;
+  energyTickMs = nowMs;
+
+  if (elapsed > 120000UL) elapsed = 120000UL;
+
+  struct tm local;
+  if (waktuValid(&local)) {
+    uint32_t currentMonthKey = kunciBulan(local);
+    if (kunciBulanTerakhir == 0) kunciBulanTerakhir = currentMonthKey;
+    else if (currentMonthKey != kunciBulanTerakhir) resetEnergiBulanan(currentMonthKey);
+  }
+
+  // Akuntansi daya berjalan jika status AC menyala
+  if (statusDayaDiketahui && targetDayaON) {
+    float hours = elapsed / 3600000.0f;
+    
+    // Jika kompresor diperkirakan aktif (Mode COOL), hitung dengan DAYA_COOL_KW (633W)
+    if (modeAC == kDaikin128Cool) {
+      kWhCoolBulanIni += hours * DAYA_COOL_KW;
+    } 
+    // Jika hanya mode FAN / DRY, hitung dengan DAYA_FAN_KW (42W)
+    else {
+      kWhFanBulanIni += hours * DAYA_FAN_KW;
+    }
+  }
+
+  if (nowMs - energySaveMs >= ENERGY_SAVE_MS) {
+    energySaveMs = nowMs;
+    simpanDataNVS();
+  }
+}
+
+void layaniTertunda() {
+  if (irTertunda && irSiap()) {
+    kirimFrameIRActual(false);
+    irTertunda = false;
+  }
+}
+
+// ============================================================
+// 12. HTTPS & EXPONENTIAL BACKOFF
+// ============================================================
+bool kirimPOST(JsonDocument& request, String& response) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  if (httpBackoffMs > 0 && millis() - waktuHttpGagalTerakhir < httpBackoffMs) {
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(8000);
+  if (!http.begin(client, API)) return false;
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-device-token", DEVICE_TOKEN);
+
+  String payload;
+  serializeJson(request, payload);
+  int code = http.POST(payload);
+  response = http.getString();
+  http.end();
+
+  if (code >= 200 && code < 300) {
+    httpBackoffMs = 0;
+    return true;
+  } else {
+    waktuHttpGagalTerakhir = millis();
+    if (httpBackoffMs == 0) httpBackoffMs = 2000;
+    else httpBackoffMs = min(httpBackoffMs * 2, 60000UL);
+    return false;
+  }
+}
+
+void kirimDataSensor() {
+  if (!sensorSegar()) return;
+
+  float totalKwhBulan = kWhCoolBulanIni + kWhFanBulanIni + kWhLainBulanIni;
+
+  JsonDocument data;
+  data["action"] = "sensor";
+  data["device_id"] = DEVICE_ID;
+  data["suhu"] = suhuKamar;
+  data["kelembapan"] = kelembapanKamar;
+  data["control_mode"] = modeKontrolAuto ? "auto" : "manual";
+  data["desired_power"] = statusDayaDiketahui ? targetDayaON : false;
+  data["ac_temp_command"] = suhuTarget;
+  data["ac_mode_command"] = namaMode(modeAC);
+  data["last_action"] = keputusanTerakhir;
+  data["schedule"] = modeJadwal;
+  data["est_kwh_bulan_ini"] = totalKwhBulan;
+  data["budget_rp_bulan"] = ANGGARAN_BULAN_RP;
+  data["est_biaya_bulan_ini"] = totalKwhBulan * TARIF_PER_KWH;
+
+  String response;
+  kirimPOST(data, response);
+}
+
+void isiState(JsonObject o) {
+  o["power"] = statusDayaDiketahui ? targetDayaON : false;
+  o["temp"] = suhuTarget;
+  o["ac_mode"] = namaMode(modeAC);
+  o["fan"] = namaKipas(kecepatanKipas);
+  o["swing"] = swing;
+  o["quiet"] = quiet;
+  o["turbo"] = turbo;
+  o["sleep"] = sleepMode;
+  o["mode"] = modeKontrolAuto ? "auto" : "manual";
+  o["sync_power"] = false;
+  o["schedule"] = modeJadwal;
+  
+  float totalKwhBulan = kWhCoolBulanIni + kWhFanBulanIni + kWhLainBulanIni;
+  float sisaKwhBulanan = TARGET_TOTAL_KWH_BULANAN - totalKwhBulan;
+  if (sisaKwhBulanan < 0) sisaKwhBulanan = 0;
+
+  static float kwhTotalAwalHari = -1.0f;
+  static int hariTerakhir = -1;
+
+  struct tm local;
+  bool NTP_OK = waktuValid(&local);
+
+  // Ambil data dari NVS jika belum dimuat
+  if (kwhTotalAwalHari < 0.0f) {
+    prefs.begin("climate8", false);
+    kwhTotalAwalHari = prefs.getFloat("kwhDayStart", -1.0f);
+    hariTerakhir = prefs.getInt("lastDay", -1);
+    prefs.end();
+  }
+
+  int hariTotal = 30;
+  int hariIniMday = 1;
+
+  if (NTP_OK) {
+    hariTotal = getHariDalamBulan(local);
+    hariIniMday = local.tm_mday;
+  }
+
+  float jatahKwhPerHari = TARGET_TOTAL_KWH_BULANAN / (float)hariTotal;
+
+  // Jika tanggal berganti, atau NVS kosong/belum pernah diset, set ulang baseline awal hari
+  if (!NTP_OK && kwhTotalAwalHari < 0.0f) {
+    kwhTotalAwalHari = totalKwhBulan;
+  } else if (NTP_OK && (hariTerakhir != hariIniMday || kwhTotalAwalHari < 0.0f)) {
+    hariTerakhir = hariIniMday;
+    kwhTotalAwalHari = totalKwhBulan; // Reset titik awal kWh khusus hari ini
+    
+    prefs.begin("climate8", false);
+    prefs.putFloat("kwhDayStart", kwhTotalAwalHari);
+    prefs.putInt("lastDay", hariTerakhir);
+    prefs.end();
+  }
+
+  // Hitung murni pemakaian hari ini
+  float kwhTerpakaiHariIni = totalKwhBulan - kwhTotalAwalHari;
+  if (kwhTerpakaiHariIni < 0) {
+    // Antisipasi jika terjadi reset kWh bulanan / anomali
+    kwhTerpakaiHariIni = 0;
+    kwhTotalAwalHari = totalKwhBulan;
+  }
+
+  float sisaKwhHarian = jatahKwhPerHari - kwhTerpakaiHariIni;
+  if (sisaKwhHarian < 0) sisaKwhHarian = 0;
+
+  o["est_kwh_bulan_ini"] = totalKwhBulan;
+  o["est_biaya_bulan_ini"] = totalKwhBulan * TARIF_PER_KWH;
+  o["budget_rp_bulan"] = ANGGARAN_BULAN_RP;
+  o["sisa_kwh_bulanan"] = sisaKwhBulanan;
+  o["sisa_biaya_bulanan"] = sisaKwhBulanan * TARIF_PER_KWH;
+  o["sisa_kwh_harian"] = sisaKwhHarian;
+  o["sisa_biaya_harian"] = sisaKwhHarian * TARIF_PER_KWH;
+}
+void terapkanStateCloud(JsonObject s, bool kirimIR) {
+  long incomingRev = s["rev"] | revTerakhir;
+  if (incomingRev < revTerakhir) return;
+  revTerakhir = incomingRev;
+
+  bool dayaTujuan = targetDayaON;
+  uint8_t modeTujuan = modeAC;
+  uint8_t tempTujuan = suhuTarget;
+  uint8_t fanTujuan = kecepatanKipas;
+  bool swingTujuan = swing;
+  bool quietTujuan = quiet;
+  bool turboTujuan = turbo;
+  bool sleepTujuan = sleepMode;
+
+  if (s["mode"].is<const char*>()) {
+    String m = s["mode"].as<String>();
+    m.trim(); m.toLowerCase();
+    if (m == "auto" || m == "manual") {
+      modeKontrolAuto = (m == "auto");
+    }
+  }
+
+  if (s["temp"].is<int>()) {
+    int t = s["temp"].as<int>();
+    if (t >= 16 && t <= 30) tempTujuan = t;
+  }
+  if (s["ac_mode"].is<const char*>()) {
+    modeTujuan = konversiMode(s["ac_mode"].as<String>());
+  }
+  if (s["fan"].is<const char*>()) {
+    fanTujuan = konversiKipas(s["fan"].as<String>());
+  }
+  if (s["swing"].is<bool>()) swingTujuan = s["swing"];
+  if (s["quiet"].is<bool>()) quietTujuan = s["quiet"];
+  if (s["turbo"].is<bool>()) turboTujuan = s["turbo"];
+  if (s["sleep"].is<bool>()) sleepTujuan = s["sleep"];
+
+  if (!modeKontrolAuto && s["power"].is<bool>()) {
+    bool p = s["power"].as<bool>();
+    bool syncManual = s["sync_power"].is<bool>() && s["sync_power"].as<bool>();
+    if (!statusDayaDiketahui || syncManual) {
+      statusDayaDiketahui = true;
+      targetDayaON = p;
+      kompresorDiperkirakanAktif = p && (modeAC == kDaikin128Cool);
+      timerDayaDiinisialisasi = true;
+      if (p) waktuMulaiDayaON = millis();
+      else waktuMulaiDayaOFF = millis();
+      perluLapor = true;
+      simpanDataNVS();
+    } else {
+      dayaTujuan = p;
+    }
+  }
+
+  eksekusiPengaturanAC(dayaTujuan, modeTujuan, tempTujuan, fanTujuan, 
+                       swingTujuan, quietTujuan, turboTujuan, sleepTujuan, kirimIR);
+}
+
+bool laporStatus() {
+  JsonDocument req;
+  req["action"] = "report_state";
+  req["device_id"] = DEVICE_ID;
+  req["base_rev"] = revTerakhir;
+  JsonObject state = req["state"].to<JsonObject>();
+  isiState(state);
+
+  String response;
+  if (!kirimPOST(req, response)) return false;
+
+  JsonDocument d;
+  if (deserializeJson(d, response)) return false;
+
+  if (d["conflict"] | false) {
+    if (d["state"].is<JsonObject>()) {
+      terapkanStateCloud(d["state"].as<JsonObject>(), false);
+    }
+    perluLapor = false;
+    return true;
+  }
+
+  if (d["rev"].is<long>()) revTerakhir = d["rev"].as<long>();
+  perluLapor = false;
+  return true;
+}
+
+void pollingPerintah() {
+  if (perluLapor) return;
+
+  JsonDocument request;
+  request["action"] = "get_state";
+  request["device_id"] = DEVICE_ID;
+  request["since_rev"] = revTerakhir;
+
+  String response;
+  if (!kirimPOST(request, response)) return;
+
+  JsonDocument data;
+  if (deserializeJson(data, response)) return;
+  if (!data["state"].is<JsonObject>()) return;
+
+  JsonObject s = data["state"].as<JsonObject>();
+  long rev = s["rev"] | 0L;
+  if (rev <= revTerakhir) return;
+
+  terapkanStateCloud(s, sinkronAwal);
+  sinkronAwal = true;
+}
+
+// ============================================================
+// 13. WEATHER
+// ============================================================
+bool perbaruiCuaca() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  String url = "https://api.open-meteo.com/v1/forecast?latitude=-7.5755&longitude=110.8243&current=temperature_2m,relative_humidity_2m&timezone=Asia%2FJakarta";
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(8000);
+  if (!http.begin(client, url)) return false;
+
+  int code = http.GET();
+  String response = http.getString();
+  http.end();
+  if (code != 200) return false;
+
+  JsonDocument data;
+  if (deserializeJson(data, response)) return false;
+  if (data["current"]["temperature_2m"].isNull()) return false;
+
+  suhuLuar = data["current"]["temperature_2m"].as<float>();
+  rhLuar = data["current"]["relative_humidity_2m"] | NAN;
+  cuacaValid = !isnan(suhuLuar);
+  waktuCuaca = millis();
+  return cuacaValid;
+}
+
+// ============================================================
+// 14. AUTO CONTROL V8
+// ============================================================
+float targetAdaptifSiang() {
+  bool panasKamar = sensorSegar() && suhuKamar >= SUHU_KAMAR_PANAS;
+  bool panasLuar = cuacaValid && (millis() - waktuCuaca < 3600000UL) &&
+                   suhuLuar >= SUHU_LUAR_PANAS;
+  return (panasKamar || panasLuar) ? TARGET_SIANG_PANAS : TARGET_SIANG_NORMAL;
+}
+
+void kontrolOtomatis() {
+  if (!modeKontrolAuto) return;
+
+  if (!statusDayaDiketahui) {
+    keputusanTerakhir = "AUTO ditahan: Status daya fisik AC UNKNOWN (Lakukan SYNC ON/OFF)";
+    return;
+  }
+  if (!sensorSegar()) {
+    keputusanTerakhir = "AUTO ditahan: Sensor DHT22 tidak segar atau terputus";
+    return;
+  }
+
+  struct tm local;
+  bool clockOk = waktuValid(&local);
+  
+  if (!clockOk) {
+    modeJadwal = "fallback_safe";
+    eksekusiPengaturanAC(targetDayaON, kDaikin128Cool, 26, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+    keputusanTerakhir = "Fallback Mode: Menunggu Sinkronisasi Jam NTP";
+    return;
+  }
+
+  bool malam = dalamJadwalMalam(local);
+  modeJadwal = malam ? "night_eco" : "day_comfort";
+
+  float totalKwhBulanIni = kWhCoolBulanIni + kWhFanBulanIni + kWhLainBulanIni;
+  float totalBiayaBulanIni = totalKwhBulanIni * TARIF_PER_KWH;
+  
+  int hariTotal = getHariDalamBulan(local);
+  int hariBerjalan = max(1, (int)local.tm_mday);
+  
+  float rataBiayaHarian = totalBiayaBulanIni / (float)hariBerjalan;
+  float proyeksiBiayaAkhirBulan = rataBiayaHarian * (float)hariTotal;
+  
+  bool anggaranKritis = proyeksiBiayaAkhirBulan > (ANGGARAN_BULAN_RP * 0.95f) || totalBiayaBulanIni >= (ANGGARAN_BULAN_RP * 0.92f);
+  bool anggaranHabis = totalBiayaBulanIni >= ANGGARAN_BULAN_RP;
+
+  if (anggaranHabis) {
+    eksekusiPengaturanAC(false, modeAC, suhuTarget, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+    keputusanTerakhir = "DARURAT: Anggaran Rp100k bulanan tercapai! AC dimatikan.";
+    return;
+  }
+
+  if (malam) {
+    if (anggaranKritis) {
+      eksekusiPengaturanAC(targetDayaON, kDaikin128Fan, 27, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+      if (suhuKamar > 28.5f && targetDayaON) {
+        eksekusiPengaturanAC(false, kDaikin128Fan, 27, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+      }
+      keputusanTerakhir = "Night Eco: Anggaran kritis, membatasi operasional malam";
+      return;
+    }
+
+    if (suhuKamar >= TARGET_MALAM_COOL_ON) {
+      eksekusiPengaturanAC(true, kDaikin128Cool, 27, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+      keputusanTerakhir = "Night Eco: Terlalu panas; meminta mode COOL";
+    } else if (suhuKamar <= TARGET_MALAM_FAN_BACK) {
+      eksekusiPengaturanAC(true, kDaikin128Fan, 27, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+      keputusanTerakhir = "Night Eco: FAN default; suhu kamar cukup nyaman";
+    }
+  } else {
+    float target = targetAdaptifSiang();
+
+    if (anggaranKritis) {
+      eksekusiPengaturanAC(targetDayaON, kDaikin128Fan, (uint8_t)target, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+      keputusanTerakhir = "Siang Comfort: Anggaran kritis, beralih ke FAN untuk sisa bulan";
+      return;
+    }
+
+    bool perluCool = suhuKamar >= target + 1.0f || (kelembapanKamar >= 80.0f && suhuKamar > target + 0.5f);
+    bool targetTercapai = suhuKamar <= target;
+
+    if (!targetDayaON) {
+      if (perluCool) {
+        eksekusiPengaturanAC(true, kDaikin128Cool, (uint8_t)target, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+        keputusanTerakhir = "Siang Comfort: Meminta COOL; menjaga kesejukan ruangan";
+      } else {
+        keputusanTerakhir = "Siang Comfort: Suhu kamar masih cukup nyaman";
+      }
+    } else {
+      if (targetTercapai) {
+        eksekusiPengaturanAC(true, kDaikin128Fan, (uint8_t)target, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+        keputusanTerakhir = "Siang Comfort: Target tercapai; beralih ke FAN hemat";
+      } else {
+        eksekusiPengaturanAC(true, kDaikin128Cool, (uint8_t)target, kecepatanKipas, swing, quiet, turbo, sleepMode, false);
+        keputusanTerakhir = "Siang Comfort: COOL aktif mendinginkan ruangan";
+      }
+    }
+  }
+}
+
+// ============================================================
+// 15. SERIAL COMMANDS
+// ============================================================
+void cetakStatus() {
+  float totalKwh = kWhCoolBulanIni + kWhFanBulanIni + kWhLainBulanIni;
+  // AMBIL WAKTU LOKAL TERKINI
+  struct tm local;
+  bool clockOk = waktuValid(&local);
+  Serial.println("\n--- SMART CLIMATE CONTROL V8 (FINAL STATUS) ---"); 
+  // TAMPILKAN JAM DAN TANGGAL
+  if (clockOk) {
+    Serial.printf("Waktu Sistem     : %02d-%02d-%d %02d:%02d:%02d WIB (NTP Sinkron)\n",
+                  local.tm_mday, local.tm_mon + 1, local.tm_year + 1900,
+                  local.tm_hour, local.tm_min, local.tm_sec);
+  } else {
+    Serial.println("Waktu Sistem     : BELUM SINKRON (Menunggu NTP / 1970)");
+  }
+  Serial.printf("Suhu kamar       : %.2f C\n", suhuKamar);
+  Serial.printf("RH kamar         : %.1f %%\n", kelembapanKamar);
+  Serial.printf("Suhu luar        : %.1f C\n", suhuLuar);
+  Serial.printf("Mode kontrol     : %s\n", modeKontrolAuto ? "AUTO" : "MANUAL");
+  Serial.printf("Jadwal           : %s\n", modeJadwal.c_str());
+  Serial.printf("Daya diketahui   : %s\n", statusDayaDiketahui ? "YA" : "TIDAK");
+  Serial.printf("Perintah daya    : %s\n", targetDayaON ? "ON" : "OFF");
+  Serial.printf("Mode AC          : %s\n", namaMode(modeAC).c_str());
+  Serial.printf("Target suhu      : %u C\n", suhuTarget);
+  Serial.printf("Total kWh Bulan  : %.3f kWh (Software Estimation)\n", totalKwh);
+  Serial.printf("Biaya Aktual     : Rp %.0f / Rp %.0f\n", totalKwh * TARIF_PER_KWH, ANGGARAN_BULAN_RP);
+  Serial.printf("Keputusan        : %s\n", keputusanTerakhir.c_str());
+  Serial.println("----------------------------------------------\n");
+}
+
+void prosesSerial() {
+  if (!Serial.available()) return;
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  String upper = cmd;
+  upper.toUpperCase();
+
+  if (upper == "STATUS") {
+    cetakStatus();
+    return;
+  }
+
+  if (upper == "RESET KWH") {
+    kWhCoolBulanIni = 0.0f;
+    kWhFanBulanIni = 0.0f;
+    kWhLainBulanIni = 0.0f;
+    simpanDataNVS();
+    perluLapor = true;
+    Serial.println("[RESET] Data kWh bulanan berhasil di-reset ke 0.");
+    return;
+  }
+
+  if (upper == "SYNC ON" || upper == "SYNC OFF") {
+    statusDayaDiketahui = true;
+    targetDayaON = (upper == "SYNC ON");
+    timerDayaDiinisialisasi = true;
+    if (targetDayaON) {
+      waktuMulaiDayaON = millis();
+      kompresorDiperkirakanAktif = (modeAC == kDaikin128Cool);
+    } else {
+      waktuMulaiDayaOFF = millis();
+      kompresorDiperkirakanAktif = false;
+    }
+    irTertunda = false;
+    perluLapor = true;
+    simpanDataNVS();
+    Serial.printf("[SYNC] Status daya diasumsikan %s; tidak mengirim IR.\n", targetDayaON ? "ON" : "OFF");
+    return;
+  }
+
+  if (upper == "POWER ON" || upper == "POWER OFF") {
+    modeKontrolAuto = false;
+    eksekusiPengaturanAC(upper == "POWER ON", modeAC, suhuTarget, kecepatanKipas, swing, quiet, turbo, sleepMode, true);
+    return;
+  }
+
+  if (upper == "AUTO") {
+    modeKontrolAuto = true;
+    simpanDataNVS();
+    perluLapor = true;
+    Serial.println("[MODE] AUTO aktif.");
+    return;
+  }
+
+  if (upper == "MANUAL") {
+    modeKontrolAuto = false;
+    simpanDataNVS();
+    perluLapor = true;
+    Serial.println("[MODE] MANUAL aktif.");
+    return;
+  }
+
+  if (upper.startsWith("TEMP ")) {
+    int t = cmd.substring(5).toInt();
+    if (t >= 16 && t <= 30) {
+      eksekusiPengaturanAC(targetDayaON, modeAC, (uint8_t)t, kecepatanKipas, swing, quiet, turbo, sleepMode, true);
+    } else {
+      Serial.println("Target suhu harus 16–30 C.");
+    }
+    return;
+  }
+
+  if (upper == "FAN") {
+    eksekusiPengaturanAC(targetDayaON, kDaikin128Fan, suhuTarget, kecepatanKipas, swing, quiet, turbo, sleepMode, true);
+    return;
+  }
+
+  if (upper == "COOL") {
+    eksekusiPengaturanAC(targetDayaON, kDaikin128Cool, suhuTarget, kecepatanKipas, swing, quiet, turbo, sleepMode, true);
+    return;
+  }
+
+  // ============================================================
+  // PERINTAH BARU UNTUK KIPAS, SWING, QUIET, TURBO, SLEEP
+  // ============================================================
+
+  // 1. Pengaturan Kecepatan Kipas
+  if (upper == "FAN AUTO" || upper == "FAN LOW" || upper == "FAN MED" || upper == "FAN HIGH") {
+    uint8_t fanBaru = kecepatanKipas;
+    if (upper == "FAN AUTO") fanBaru = kDaikin128FanAuto;
+    else if (upper == "FAN LOW") fanBaru = kDaikin128FanLow;
+    else if (upper == "FAN MED") fanBaru = kDaikin128FanMed;
+    else if (upper == "FAN HIGH") fanBaru = kDaikin128FanHigh;
+
+    eksekusiPengaturanAC(targetDayaON, modeAC, suhuTarget, fanBaru, swing, quiet, turbo, sleepMode, true);
+    Serial.printf("[FAN] Kipas diubah ke: %s\n", namaKipas(fanBaru).c_str());
+    return;
+  }
+
+  // 2. Pengaturan Swing Vertical
+  if (upper == "SWING ON" || upper == "SWING OFF") {
+    bool swingBaru = (upper == "SWING ON");
+    eksekusiPengaturanAC(targetDayaON, modeAC, suhuTarget, kecepatanKipas, swingBaru, quiet, turbo, sleepMode, true);
+    Serial.printf("[SWING] Swing vertical: %s\n", swingBaru ? "ON" : "OFF");
+    return;
+  }
+
+  // 3. Pengaturan Quiet Mode (Mode Hening)
+  if (upper == "QUIET ON" || upper == "QUIET OFF") {
+    bool quietBaru = (upper == "QUIET ON");
+    eksekusiPengaturanAC(targetDayaON, modeAC, suhuTarget, kecepatanKipas, swing, quietBaru, turbo, sleepMode, true);
+    Serial.printf("[QUIET] Mode Quiet: %s\n", quietBaru ? "ON" : "OFF");
+    return;
+  }
+
+  // 4. Pengaturan Turbo / Powerful Mode
+  if (upper == "TURBO ON" || upper == "TURBO OFF") {
+    bool turboBaru = (upper == "TURBO ON");
+    eksekusiPengaturanAC(targetDayaON, modeAC, suhuTarget, kecepatanKipas, swing, quiet, turboBaru, sleepMode, true);
+    Serial.printf("[TURBO] Mode Powerful/Turbo: %s\n", turboBaru ? "ON" : "OFF");
+    return;
+  }
+
+  // 5. Pengaturan Sleep Mode
+  if (upper == "SLEEP ON" || upper == "SLEEP OFF") {
+    bool sleepBaru = (upper == "SLEEP ON");
+    eksekusiPengaturanAC(targetDayaON, modeAC, suhuTarget, kecepatanKipas, swing, quiet, turbo, sleepBaru, true);
+    Serial.printf("[SLEEP] Mode Sleep: %s\n", sleepBaru ? "ON" : "OFF");
+    return;
+  }
+
+  Serial.println("Perintah tidak dikenal!");
+  Serial.println("Daftar perintah:");
+  Serial.println(" - POWER ON / POWER OFF");
+  Serial.println(" - AUTO / MANUAL");
+  Serial.println(" - TEMP 16-30");
+  Serial.println(" - COOL / FAN");
+  Serial.println(" - FAN AUTO / FAN LOW / FAN MED / FAN HIGH");
+  Serial.println(" - SWING ON / SWING OFF");
+  Serial.println(" - QUIET ON / QUIET OFF");
+  Serial.println(" - TURBO ON / TURBO OFF");
+  Serial.println(" - SLEEP ON / SLEEP OFF");
+  Serial.println(" - SYNC ON / SYNC OFF");
+  Serial.println(" - RESET KWH");
+  Serial.println(" - STATUS");
+}
+
+// ============================================================
+// 16. SETUP & LOOP
+// ============================================================
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.setTimeout(50);
+
+  dht.begin();
+  ac.begin();
+  muatDataNVS();
+
+  // PERBAIKAN: Jika status daya belum pernah disync atau tersimpan di NVS, 
+  // set default ke true agar perintah kontrol langsung bisa dieksekusi.
+  if (!statusDayaDiketahui) {
+    statusDayaDiketahui = true;
+    targetDayaON = false; // Asumsi awal AC dalam keadaan mati (OFF) saat ESP menyala
+    timerDayaDiinisialisasi = true;
+    waktuMulaiDayaOFF = millis();
+  }
+
+  configTzTime("WIB-7", "pool.ntp.org", "time.google.com");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  if (String(WIFI_SSID) != "YOUR_WIFI_SSID") {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  } else {
+    Serial.println("[CONFIG] Isi WIFI_SSID dan WIFI_PASSWORD terlebih dahulu.");
+  }
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000UL) {
+    delay(250);
+  }
+
+  timerSensor = millis() - READ_INTERVAL;
+  timerPost = millis();
+  timerPoll = millis() - POLL_INTERVAL;
+  timerLapor = millis();
+  timerCuaca = millis() - WEATHER_INTERVAL;
+  timerAuto = millis();
+  timerWiFi = millis();
+  energyTickMs = millis();
+  energySaveMs = millis();
+
+  Serial.println("\n[SYSTEM] Smart Climate Control V8 Final Ready.");
+  Serial.printf("Target anggaran bulanan: Rp%.0f; target total kWh: %.2f kWh.\n",
+                ANGGARAN_BULAN_RP, TARGET_TOTAL_KWH_BULANAN);
+  Serial.println("Sistem siap. Ketik STATUS, AUTO, MANUAL, atau TEMP [16-30] di Serial Monitor."); // <-- DIUBAH
+}
+
+void loop() {
+  prosesSerial();
+  layaniTertunda();
+
+  unsigned long now = millis();
+
+  // Pemicu agar ESP32 rutin melapor ke Supabase tiap 15 detik
+  static unsigned long timerDorongLaporan = 0;
+  if (now - timerDorongLaporan >= 15000UL) {
+    timerDorongLaporan = now;
+    perluLapor = true; 
+  }
+
+  if (WiFi.status() != WL_CONNECTED && now - timerWiFi >= WIFI_INTERVAL) {
+    timerWiFi = now;
+    WiFi.reconnect();
+  }
+
+  if (now - timerSensor >= READ_INTERVAL) {
+    timerSensor = now;
+    bacaSensor();
+  }
+
+  perbaruiEnergi();
+
+  if (perluLapor && WiFi.status() == WL_CONNECTED &&
+      now - timerLapor >= LAPOR_INTERVAL) {
+    timerLapor = now;
+    laporStatus();
+  }
+
+  if (WiFi.status() == WL_CONNECTED && now - timerPost >= POST_INTERVAL) {
+    timerPost = now;
+    kirimDataSensor();
+  }
+
+  if (WiFi.status() == WL_CONNECTED && now - timerPoll >= POLL_INTERVAL) {
+    timerPoll = now;
+    pollingPerintah();
+  }
+
+  if (WiFi.status() == WL_CONNECTED && now - timerCuaca >= WEATHER_INTERVAL) {
+    timerCuaca = now;
+    perbaruiCuaca();
+  }
+
+  if (now - timerAuto >= AUTO_INTERVAL) {
+    timerAuto = now;
+    kontrolOtomatis();
+  }
+
+  delay(2);
+}

@@ -363,17 +363,7 @@
         // Kirim perintah reset atau sinkronisasi
         try {
           const payload = {
-            power: state.power,
-            mode: state.control === "manual" ? "manual" : "auto",
-            temp: state.temp,
-            ac_mode: state.mode,
-            fan: state.fan,
-            swing: state.swing,
-            quiet: state.quiet,
-            turbo: state.turbo,
-            sleep: state.sleep,
-            limit_siang: state.limitSiang,
-            limit_malam: state.limitMalam
+            reset_kwh: true
           };
           const res = await fetch("/api/ac-command", {
             method: "POST",
@@ -435,5 +425,6 @@
     document.addEventListener("DOMContentLoaded", init, { once: true });
   } else init();
 })();
+
 
 

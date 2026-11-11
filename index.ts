@@ -161,11 +161,11 @@ async function merge(
     }
   }
 
-  // Jika reset_kwh dikirim bernilai true, set est_kwh_bulan_ini dan est_biaya_bulan_ini jadi 0 di database
   if (patch.reset_kwh === true) {
     update["est_kwh_bulan_ini"] = 0;
     update["est_biaya_bulan_ini"] = 0;
     update["sisa_kwh_harian"] = update["sisa_kwh_bulanan"];
+    update["reset_kwh"] = false; // One-shot trigger agar tidak looping
   }
 
   let result;
