@@ -14,7 +14,7 @@
 
   function init() {
     if ($("smart-ac")) return;
-    
+
     const pageAc = $("page-ac") || document.body;
     const panel = document.createElement("div");
     panel.id = "smart-ac";
@@ -112,8 +112,9 @@
     `;
     pageAc.appendChild(panel);
 
-    const pageWeather = $("page-weather") || document.body;
+    const weatherMount = $("outdoor-weather-mount") || $("page-weather") || $("page-temperature") || document.body;
     const weatherPanel = document.createElement("div");
+    weatherPanel.style.marginTop = "20px";
     weatherPanel.innerHTML = `
       <div class="weather-heading" style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); border:1px solid var(--panel-border); border-radius:16px; padding:20px 24px; margin-bottom:16px;">
         <div>
@@ -152,7 +153,7 @@
         <p id="weather-time" class="weather-time" style="margin:0; font-size:11px; color:var(--text-muted);">Pembaruan: menunggu data</p>
       </div>
     `;
-    pageWeather.appendChild(weatherPanel);
+    weatherMount.appendChild(weatherPanel);
 
     async function sendACCommandNow(isPowerAction = false) {
       const mode = state.control === "manual" ? "manual" : "auto";
@@ -241,7 +242,7 @@
       if ($("ac-est-biaya")) $("ac-est-biaya").textContent = Math.round(state.estBiaya).toLocaleString("id-ID");
       if ($("ac-sisa-bulan")) $("ac-sisa-bulan").textContent = (state.sisaBulan || 0).toFixed(2);
       if ($("ac-sisa-harian")) $("ac-sisa-harian").textContent = (state.sisaHarian || 0).toFixed(2);
-      
+
       if ($("limit-siang")) $("limit-siang").value = state.limitSiang;
       if ($("limit-malam")) $("limit-malam").value = state.limitMalam;
 
@@ -253,7 +254,7 @@
       $("ac-state-badge").classList.toggle("is-on", state.power);
 
       document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("selected", b.dataset.mode === state.mode));
-      
+
       const fanDisabled = state.quiet || state.turbo;
       document.querySelectorAll("[data-fan]").forEach(b => {
         b.classList.toggle("selected", (b.dataset.fan === "medium" ? "med" : b.dataset.fan) === state.fan);
@@ -274,7 +275,7 @@
 
       $("ac-auto").classList.toggle("active", state.control === "auto_adaptive");
       $("ac-auto").setAttribute("aria-checked", String(state.control === "auto_adaptive"));
-      
+
       const toggleSpan = $("ac-auto").querySelector("span");
       if (toggleSpan) {
         toggleSpan.style.left = state.control === "auto_adaptive" ? "25px" : "3px";
@@ -336,7 +337,6 @@
       }
     }
 
-    // Event Listeners untuk Simpan Pengaturan & Reset kWh
     document.addEventListener("click", async (e) => {
       if (e.target && e.target.id === "btn-save-settings") {
         const budgetInput = $("input-budget");
@@ -360,11 +360,8 @@
         if (!confirm("Yakin ingin mereset akumulasi kWh bulanan ke 0?")) return;
         const statusEl = $("settings-status");
         if (statusEl) statusEl.textContent = "Mereset data kWh...";
-        // Kirim perintah reset atau sinkronisasi
         try {
-          const payload = {
-            reset_kwh: true
-          };
+          const payload = { reset_kwh: true };
           const res = await fetch("/api/ac-command", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -425,6 +422,3 @@
     document.addEventListener("DOMContentLoaded", init, { once: true });
   } else init();
 })();
-
-
-

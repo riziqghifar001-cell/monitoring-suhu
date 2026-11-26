@@ -21,9 +21,8 @@
     </div>
     <nav class="nav-links">
       <button class="nav-btn active" data-target="page-dashboard">Dashboard</button>
-      <button class="nav-btn" data-target="page-room">Kondisi Ruangan</button>
+      <button class="nav-btn" data-target="page-temperature">Kondisi Suhu</button>
       <button class="nav-btn" data-target="page-ac">Kontrol AC</button>
-      <button class="nav-btn" data-target="page-weather">Suhu Luar</button>
       <button class="nav-btn" data-target="page-settings">Batas & Anggaran</button>
     </nav>
   </header>
@@ -128,13 +127,13 @@
       </div>
     </section>
 
-    <!-- 2. KONDISI RUANGAN -->
-    <section id="page-room" class="page-tab">
+    <!-- 2. KONDISI SUHU (RUANGAN + LUAR) -->
+    <section id="page-temperature" class="page-tab">
       <div class="header-banner">
         <div>
-          <p class="eyebrow">MONITORING SENSOR</p>
-          <h1>Kondisi Kamar</h1>
-          <p class="subtitle">Pemantauan lingkungan termal ruangan secara langsung.</p>
+          <p class="eyebrow">MONITORING IKLIM</p>
+          <h1>Kondisi Suhu</h1>
+          <p class="subtitle">Pemantauan suhu dan kelembapan ruangan serta cuaca luar secara langsung.</p>
         </div>
         <div id="statusDot" class="status online">
           <span id="statusText">ESP32 Terhubung</span>
@@ -174,6 +173,8 @@
           <p class="reading-note">Kelembapan relatif udara</p>
         </article>
       </section>
+
+      <div id="outdoor-weather-mount"></div>
     </section>
 
     <!-- 3. KONTROL AC -->
@@ -181,12 +182,7 @@
       <!-- Di-mount otomatis oleh ac-weather-control.js -->
     </section>
 
-    <!-- 4. SUHU LUAR -->
-    <section id="page-weather" class="page-tab">
-      <!-- Di-mount otomatis oleh ac-weather-control.js -->
-    </section>
-
-    <!-- 5. TARGET & JADWAL -->
+    <!-- 4. BATAS & ANGGARAN -->
     <section id="page-settings" class="page-tab">
       <div class="header-banner">
         <div>
