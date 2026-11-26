@@ -1,4 +1,4 @@
-﻿const $ = id => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
 // ==========================================
 // 1. KONFIGURASI SUPABASE
@@ -314,7 +314,6 @@ async function refreshHistoryData(force = false) {
   try {
     const rows = await fetchTodayHistory();
     historyRecords = rows;
-    analyzeDaily(historyRecords);
   } catch (err) {
     console.error("Gagal mengambil riwayat harian:", err);
   } finally {
