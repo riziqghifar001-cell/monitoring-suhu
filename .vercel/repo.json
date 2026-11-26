@@ -1,0 +1,11 @@
+{
+  "remoteName": "origin",
+  "projects": [
+    {
+      "id": "prj_kqduXkrE594hgio3IiKCaBSJg2VO",
+      "name": "monitoring-suhu-1",
+      "directory": ".",
+      "orgId": "team_uclRlVWPW4IodrAceBzNyYBu"
+    }
+  ]
+}
